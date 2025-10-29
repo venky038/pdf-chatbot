@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Chatbot</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <div class="sidebar">
+      <header>
+        <h2>My Chats</h2>
+        <div class="user-info">Logged in as: <strong id="usernameDisplay">...</strong></div>
+        <button id="logoutBtn">Logout</button>
+      </header>
+      <div class="conversation-list" id="conversationList"></div>
+    </div>
+    <div class="chat-container">
+      <header>
+        <h2 id="chatTitle">📄 PDF Chat Assistant</h2>
+        <div class="header-controls">
+          <button id="summaryBtn" class="header-button" style="display: none;">Show Summary</button>
+          <div class="upload-box">
+            <input type="file" id="pdfInput" accept=".pdf" />
+            <label for="pdfInput" class="upload-label" id="pdfLabel">Choose PDF</label>
+            <button id="uploadBtn" type="button" onclick="event.preventDefault()">Upload PDF</button>
+          </div>
+        </div>
+      </header>
+      <div id="chatBox" class="chat-box">
+        <div class="message bot" id="welcomeMessage">Hello! Upload a PDF or select a chat.</div>
+      </div>
+      <div class="input-box">
+        <input type="text" id="userInput" placeholder="Ask a question..." disabled />
+        <button id="sendBtn" type="button" disabled>Send</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="summaryModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Conversation Summary</h3>
+        <button class="modal-close" id="closeModalBtn">&times;</button>
+      </div>
+      <div class="modal-body" id="summaryContent"></div>
+      <div class="modal-footer">
+        <button id="downloadPdfBtn" class="header-button" disabled>Download as PDF</button>
+      </div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

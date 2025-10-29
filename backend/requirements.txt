@@ -1,0 +1,18 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+langchain-community
+langchain-huggingface  # <-- This is the new one
+langchain-text-splitters
+faiss-cpu
+sentence-transformers
+requests
+PyMuPDF
+python-multipart
+aiofiles
+pytesseract
+Pillow
+sqlalchemy[pydantic-plugin] # <-- NEW for database
+passlib
+argon2-cffi           # <-- NEW for passwords
+python-jose[cryptography]

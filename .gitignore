@@ -1,0 +1,30 @@
+# Python virtual environment
+env/
+venv/
+*.pyc
+__pycache__/
+
+# Database file
+chat_app.db
+
+# Uploaded PDFs and Vector Stores
+# IMPORTANT: Only ignore if you DON'T want these backed up.
+# If you DO want them backed up, remove these lines.
+uploads/
+vector_stores/
+
+# Secrets
+/.env
+
+# IDE / OS files
+.vscode/
+.idea/
+*.DS_Store
+
+
+# ... (other ignored items) ...
+
+# FAISS index files (adjust path if needed)
+backend/faiss_index/ 
+# OR make sure this line exists:
+vector_stores/
