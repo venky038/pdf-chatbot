@@ -3,19 +3,55 @@ body { font-family: "Segoe UI", sans-serif; background: #f5f7fa; margin: 0; heig
 .app-container { display: flex; height: 100vh; width: 100%; }
 
 /* Sidebar */
-.sidebar { width: 280px; flex-shrink: 0; background: #fdfdfd; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; }
-.sidebar header { padding: 1rem; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-.sidebar h2 { font-size: 1.2rem; margin: 0; width: 100%; order: 1; /* Title first */ margin-bottom: 5px;}
-.user-info { width: 70%; text-align: left; font-size: 0.85rem; color: #555; order: 2; /* Username second */ white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-#logoutBtn { background: #f1f1f1; color: #333; border: 1px solid #ddd; padding: 5px 10px; border-radius: 8px; cursor: pointer; order: 3; /* Button last */}
+.sidebar {
+    width: 280px; /* Default width */
+    min-width: 200px; /* Minimum width */
+    max-width: 50%; /* Maximum width */
+    flex-shrink: 0; background: #fdfdfd; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; position: relative; /* For resizer */
+}
+.sidebar header { padding: 1rem; border-bottom: 1px solid #e0e0e0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.sidebar h2 { font-size: 1.2rem; margin: 0; width: 100%; order: 1; }
+#searchChats { /* Search Bar Style */
+    width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #ddd; font-size: 0.9rem; order: 2;
+}
+.user-info { width: calc(100% - 70px); /* Adjust width based on logout button */ text-align: left; font-size: 0.85rem; color: #555; order: 3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#logoutBtn { background: #f1f1f1; color: #333; border: 1px solid #ddd; padding: 5px 10px; border-radius: 8px; cursor: pointer; order: 4; margin-left: auto; /* Push to right */}
 #logoutBtn:hover { background: #e9e9e9; }
 .conversation-list { flex: 1; overflow-y: auto; padding: 0.5rem; display: flex; flex-direction: column; gap: 5px; }
-.convo-item { padding: 0.75rem 1rem; border-radius: 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.9rem; }
+.convo-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.75rem 1rem; border-radius: 8px; cursor: pointer;
+    font-size: 0.9rem; position: relative; /* For hover actions */
+    overflow: hidden; /* Hide actions initially */
+}
+.convo-item span { /* Title span */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; margin-right: 5px;
+}
 .convo-item:hover { background: #f0f4f8; }
 .convo-item.active { background: #e2eaf3; font-weight: 600; }
 
+.convo-actions { /* Edit/Delete Buttons Container */
+    display: none; /* Hidden by default */
+    flex-shrink: 0;
+}
+.convo-item:hover .convo-actions {
+    display: flex; /* Show on hover */
+    gap: 5px;
+}
+.convo-actions button {
+    background: none; border: none; font-size: 0.9rem; cursor: pointer; padding: 2px 4px; border-radius: 4px;
+}
+.convo-actions button:hover { background: rgba(0,0,0,0.1); }
+
+/* Resizer Handle */
+.resizer {
+    width: 5px; height: 100%; background: #e0e0e0; cursor: col-resize; flex-shrink: 0; position: relative; z-index: 10;
+}
+.resizer:hover, .resizer.active { background: #0078d7; }
+
 /* Main Chat */
-.chat-container { flex: 1; background: white; display: flex; flex-direction: column; overflow: hidden; height: 100vh; }
+.chat-container { flex: 1; background: white; display: flex; flex-direction: column; overflow: hidden; height: 100vh; min-width: 300px; /* Minimum width */ }
+/* ... (Rest of chat container, header, controls, chat-box, message, input-box styles remain mostly the same) ... */
 .chat-container header { background: #0078d7; color: white; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
 .chat-container header h2 { margin: 0; font-size: 1.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; margin-right: 1rem; }
 .header-controls { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
@@ -24,15 +60,11 @@ input[type="file"] { display: none; }
 .upload-label, #uploadBtn, .header-button { padding: 8px 12px; background: white; border: none; border-radius: 8px; color: #0078d7; font-weight: 600; cursor: pointer; transition: 0.2s; font-size: 0.9rem; }
 .upload-label:hover, #uploadBtn:hover, .header-button:hover { background: #f0f7ff; }
 .header-button:disabled { background: #e0e0e0; color: #999; cursor: not-allowed; }
-
-/* Chat Box */
 .chat-box { flex: 1; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; background: #fbfbfb; }
 .message { padding: 12px 16px; border-radius: 12px; line-height: 1.4; white-space: pre-wrap; max-width: 80%; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
 .message.user { background: #0078d7; color: white; align-self: flex-end; }
 .message.bot { background: #f1f1f1; color: #333; align-self: flex-start; }
 .message.bot p { margin: 0 0 0.5rem 0; } .message.bot p:last-child { margin-bottom: 0; }
-
-/* Input Box */
 .input-box { display: flex; padding: 1rem; border-top: 1px solid #ddd; background: #fdfdfd; flex-shrink: 0; }
 .input-box input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 10px; outline: none; font-size: 1rem; transition: 0.2s; }
 .input-box input:focus { border-color: #0078d7; box-shadow: 0 0 5px rgba(0, 120, 215, 0.5); }
@@ -56,22 +88,26 @@ input[type="file"] { display: none; }
 .transcript-item { margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; line-height: 1.5; }
 .transcript-item strong { display: block; margin-bottom: 4px; font-size: 0.9em; color: #555; }
 .transcript-item.user { background: #eef5ff; border-left: 3px solid #0078d7; }
-.transcript-item.assistant { background: #f8f8f8; border-left: 3px solid #888; } /* Changed bot to assistant */
+.transcript-item.assistant { background: #f8f8f8; border-left: 3px solid #888; }
 .modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #ddd; display: flex; justify-content: flex-end; background-color: #f9f9f9; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
 .modal-footer .header-button { margin-left: 10px; }
 
 /* Responsive */
 @media (max-width: 768px) {
   .app-container { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #e0e0e0; }
+  .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid #e0e0e0; min-width: unset; max-width: unset;}
+  .resizer { display: none; } /* Hide resizer on mobile */
   .sidebar header { padding: 0.75rem 1rem; }
-  .sidebar h2 { font-size: 1rem; margin-bottom: 0;}
-  .user-info { font-size: 0.8rem; margin-top: 0; order: 2; width: auto; text-align: left; margin-left: 10px; }
-  #logoutBtn { order: 3;}
+  .sidebar h2 { font-size: 1rem; margin-bottom: 5px; }
+  #searchChats { order: 3; margin-top: 5px;}
+  .user-info { font-size: 0.8rem; margin-top: 0; order: 4; width: auto; text-align: left; margin-left: 0; }
+  #logoutBtn { order: 5; }
   .conversation-list { max-height: 100px; padding: 0.25rem 0.5rem; flex-direction: row; overflow-x: auto; overflow-y: hidden; }
   .convo-item { flex-shrink: 0; font-size: 0.85rem; padding: 0.5rem 0.75rem; }
-  .chat-container { height: calc(100vh - 150px); /* Adjust based on actual sidebar height */ }
-  .chat-container header { padding: 0.75rem 1rem; }
+  .convo-actions { display: flex; gap: 5px; } /* Always show actions on mobile? Or keep hover? */
+  .chat-container { height: calc(100vh - 200px); /* Adjust based on actual header+sidebar height */ min-width: unset;}
+  /* ... (rest of responsive styles) ... */
+   .chat-container header { padding: 0.75rem 1rem; }
   .chat-container header h2 { font-size: 1rem; }
   .header-controls { gap: 0.5rem; }
   .upload-label, #uploadBtn, .header-button { font-size: 0.8rem; padding: 6px 10px; }
