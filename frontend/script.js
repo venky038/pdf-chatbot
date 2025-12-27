@@ -1,292 +1,252 @@
-// --- DOM ELEMENTS ---
+const API_BASE = "http://127.0.0.1:8000";
+let currentConversationId = null;
+let currentVectorStoreId = null; 
+let currentSummaryData = null; // Store summary for PDF download
+const token = localStorage.getItem("accessToken");
+
 const chatBox = document.getElementById("chatBox");
 const userInput = document.getElementById("userInput");
-const sendBtn = document.getElementById("sendBtn");
-const pdfInput = document.getElementById("pdfInput");
-const conversationList = document.getElementById("conversationList");
-const chatTitle = document.getElementById("chatTitle");
-const logoutBtn = document.getElementById("logoutBtn");
-const usernameDisplay = document.getElementById("usernameDisplay");
-const searchInput = document.getElementById("searchChats");
+const popover = document.getElementById("citationPopover");
+const popoverContent = document.getElementById("popoverContent");
+const popoverTitle = document.getElementById("popoverTitle");
 
 // Summary Elements
 const summaryBtn = document.getElementById("summaryBtn");
 const summaryModal = document.getElementById("summaryModal");
-const closeModalBtn = document.getElementById("closeModalBtn");
 const summaryContent = document.getElementById("summaryContent");
-const downloadSummaryPdfBtn = document.getElementById("downloadSummaryPdfBtn");
+const closeModalBtn = document.getElementById("closeModalBtn");
+const downloadSummaryBtn = document.getElementById("downloadSummaryBtn");
 
-// --- STATE ---
-const API_BASE = "http://127.0.0.1:8000";
-let currentConversationId = null;
-let currentVectorStoreId = null; 
-let currentSummaryData = null;
-let conversationsCache = [];
-const token = localStorage.getItem("accessToken");
-
-// --- INITIALIZATION ---
-document.addEventListener("DOMContentLoaded", async () => {
-    if (!token) {
-        window.location.href = "login.html";
-        return;
-    }
-    try {
-        const user = await fetchWithAuth("/users/me");
-        usernameDisplay.textContent = user.username;
-        await loadConversations();
-    } catch (e) {
-        console.error("Init Error:", e);
-    }
+// --- INIT ---
+document.addEventListener("DOMContentLoaded", () => {
+    if(!token) window.location.href = "login.html";
+    loadConversations();
+    
+    // Close popover on outside click
+    document.addEventListener("click", (e) => {
+        if (!popover.contains(e.target) && !e.target.classList.contains("citation-link")) {
+            popover.style.display = "none";
+        }
+        if (e.target === summaryModal) {
+            summaryModal.style.display = "none";
+        }
+    });
 });
 
-// --- API HELPER ---
-async function fetchWithAuth(url, options = {}) {
-    const headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
-    if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
-        headers['Content-Type'] = 'application/json';
-    }
-    const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
-    if (res.status === 401) {
-        localStorage.removeItem("accessToken");
-        window.location.href = "login.html";
-        throw new Error("Unauthorized");
-    }
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `API Error ${res.status}`);
-    }
-    return res.json();
-}
+document.getElementById("closePopover").onclick = () => popover.style.display = "none";
+closeModalBtn.onclick = () => summaryModal.style.display = "none";
 
-// --- CONVERSATION LOGIC ---
-async function loadConversations() {
-    try {
-        conversationsCache = await fetchWithAuth("/conversations");
-        renderConversationList();
-    } catch (e) { console.error(e); }
-}
-
-function renderConversationList(filter = "") {
-    conversationList.innerHTML = "";
-    const filtered = conversationsCache.filter(c => c.title.toLowerCase().includes(filter.toLowerCase()));
-    
-    if (filtered.length === 0) {
-        conversationList.innerHTML = `<div style="text-align:center; padding:1rem; opacity:0.6;">No chats found</div>`;
-        return;
-    }
-
-    filtered.forEach(convo => {
-        const div = document.createElement("div");
-        div.className = `chat-item ${currentConversationId === convo.id ? 'active' : ''}`;
-        
-        div.innerHTML = `
-            <span>${convo.title}</span>
-            <div class="chat-item-actions">
-                <button class="icon-btn" onclick="event.stopPropagation(); deleteChat(${convo.id})">🗑️</button>
-            </div>
-        `;
-        div.onclick = () => loadChatHistory(convo.id);
-        conversationList.appendChild(div);
-    });
-}
-
-async function deleteChat(id) {
-    if (!confirm("Delete this conversation?")) return;
-    try {
-        await fetchWithAuth(`/conversations/${id}`, { method: "DELETE" });
-        conversationsCache = conversationsCache.filter(c => c.id !== id);
-        if (currentConversationId === id) {
-            currentConversationId = null;
-            currentVectorStoreId = null;
-            chatTitle.textContent = "Select a Conversation";
-            chatBox.innerHTML = "";
-            setChatInputEnabled(false);
-        }
-        renderConversationList(searchInput.value);
-    } catch (e) { alert(e.message); }
-}
-
-// --- CHAT HISTORY ---
-async function loadChatHistory(convoId) {
-    try {
-        currentConversationId = convoId;
-        chatBox.innerHTML = '<div style="text-align:center; padding:2rem;">Loading...</div>';
-        
-        const data = await fetchWithAuth(`/conversations/${convoId}`);
-        currentVectorStoreId = data.vector_store_id; 
-        chatTitle.textContent = data.title;
-        
-        chatBox.innerHTML = ""; 
-        data.messages.forEach(msg => appendMessage(msg.role, msg.content));
-        
-        setChatInputEnabled(true);
-        renderConversationList(searchInput.value);
-        
-    } catch (e) {
-        chatBox.innerHTML = `<div style="color:red; text-align:center;">Error: ${e.message}</div>`;
-    }
-}
-
-// --- MESSAGE RENDERING ---
-function appendMessage(role, text) {
-    const isUser = role === 'user';
-    const div = document.createElement("div");
-    div.className = `message ${isUser ? 'user' : 'bot'}`;
-    
-    const contentDiv = document.createElement("div");
-    contentDiv.className = "msg-content";
-    
-    if (isUser) {
-        contentDiv.textContent = text;
-    } else {
-        // Parse Markdown & Citations
-        let html = marked.parse(text || "");
-        if (currentVectorStoreId) {
-            html = html.replace(/\[(Source:\s?)?Page\s?(\d+)\]/gi, (match, prefix, pageNum) => {
-                const url = `${API_BASE}/uploads/${currentVectorStoreId}.pdf#page=${pageNum}`;
-                return `<a href="${url}" target="_blank" class="citation-link" title="Open PDF Page ${pageNum}">📄 Page ${pageNum}</a>`;
-            });
-        }
-        contentDiv.innerHTML = html;
-    }
-    
-    div.appendChild(contentDiv);
-    chatBox.appendChild(div);
-    chatBox.scrollTop = chatBox.scrollHeight;
-    return contentDiv;
-}
-
+// --- CHAT LOGIC ---
 async function handleSend() {
     const text = userInput.value.trim();
-    if (!text || !currentConversationId) return;
+    if(!text || !currentConversationId) return;
     
     appendMessage('user', text);
     userInput.value = "";
     
-    const botContent = appendMessage('bot', "");
-    botContent.innerHTML = `<div class="loading-dots"><span></span><span></span><span></span></div>`;
+    // 1. ADD "THINKING" INDICATOR
+    const botContentDiv = appendMessage('bot', "");
+    botContentDiv.innerHTML = `
+        <div class="typing-indicator">
+            <span></span><span></span><span></span>
+        </div>`;
     
     try {
-        const res = await fetchWithAuth("/ask", {
+        const response = await fetch(`${API_BASE}/ask`, {
             method: "POST",
+            headers: { 
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}` 
+            },
             body: JSON.stringify({ question: text, conversation_id: currentConversationId })
         });
         
-        const parent = botContent.parentElement;
-        parent.remove(); 
-        appendMessage('bot', res.answer);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = "";
         
+        // 2. Clear indicator on first chunk
+        let isFirstChunk = true;
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            if (isFirstChunk) {
+                botContentDiv.innerHTML = ""; // Remove dots
+                isFirstChunk = false;
+            }
+            
+            fullText += decoder.decode(value);
+            renderTextWithCitations(botContentDiv, fullText);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
     } catch (e) {
-        botContent.innerHTML = `<span style="color:red">Error: ${e.message}</span>`;
+        botContentDiv.textContent = "Error: " + e.message;
     }
 }
-
-// --- UPLOAD ---
-pdfInput.addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    if (confirm(`Upload ${file.name}?`)) {
-        const originalText = chatTitle.textContent;
-        chatTitle.textContent = "⏳ Uploading & Indexing...";
-        
-        const formData = new FormData();
-        formData.append("file", file);
-        
-        try {
-            const res = await fetch(`${API_BASE}/upload_pdf`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` },
-                body: formData
-            });
-            
-            if (!res.ok) throw new Error("Upload failed");
-            const data = await res.json();
-            
-            await loadConversations();
-            await loadChatHistory(data.conversation_id);
-            
-        } catch (e) {
-            alert("Upload Error: " + e.message);
-            chatTitle.textContent = originalText;
-        } finally {
-            pdfInput.value = "";
-        }
-    } else {
-        pdfInput.value = "";
-    }
-});
 
 // --- SUMMARY LOGIC ---
-summaryBtn.addEventListener("click", async () => {
-    if (!currentConversationId) return;
-    
-    summaryModal.classList.add("show");
-    summaryContent.innerHTML = `<div class="loading-dots"><span></span><span></span><span></span></div>`;
+summaryBtn.onclick = async () => {
+    summaryModal.style.display = "flex";
+    summaryContent.innerHTML = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
     
     try {
-        const data = await fetchWithAuth(`/conversations/${currentConversationId}/summarize`);
-        currentSummaryData = data;
+        const res = await fetch(`${API_BASE}/conversations/${currentConversationId}/summarize`, {
+             headers: { "Authorization": `Bearer ${token}` } 
+        });
+        const data = await res.json();
+        currentSummaryData = data.generated_summary;
         
-        let html = marked.parse(data.generated_summary);
-        if (currentVectorStoreId) {
-             html = html.replace(/\[(Source:\s?)?Page\s?(\d+)\]/gi, (match, prefix, pageNum) => {
-                const url = `${API_BASE}/uploads/${currentVectorStoreId}.pdf#page=${pageNum}`;
-                return `<a href="${url}" target="_blank" class="citation-link">📄 Page ${pageNum}</a>`;
-            });
-        }
-        summaryContent.innerHTML = html;
-        
+        renderTextWithCitations(summaryContent, currentSummaryData);
     } catch (e) {
-        summaryContent.innerHTML = `<span style="color:red">Error: ${e.message}</span>`;
+        summaryContent.textContent = "Failed to generate summary.";
     }
-});
+};
 
-closeModalBtn.addEventListener("click", () => summaryModal.classList.remove("show"));
-window.onclick = (e) => { if (e.target === summaryModal) summaryModal.classList.remove("show"); };
-
-// --- PDF REPORT GENERATION (FIXED) ---
-function cleanMarkdown(text) {
-    if (!text) return "";
-    return text
-        .replace(/\*\*(.*?)\*\*/g, '$1') // Bold
-        .replace(/###\s?/g, '')           // Headers
-        .replace(/##\s?/g, '')
-        .replace(/#\s?/g, '')
-        .replace(/\[Source: Page \d+\]/g, '') // Remove citations for cleaner PDF report
-        .replace(/\n\n/g, '\n');          // Fix double spacing
-}
-
-downloadSummaryPdfBtn.addEventListener("click", () => {
-    if (!currentSummaryData) return;
+downloadSummaryBtn.onclick = () => {
+    if(!currentSummaryData) return;
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
-    doc.setFontSize(16);
-    doc.text("Conversation Summary", 10, 10);
+    // Strip markdown for clean PDF
+    const cleanText = currentSummaryData.replace(/\*\*/g, "").replace(/###/g, ""); 
     
     doc.setFontSize(12);
-    // Use CLEANED text, not raw Markdown
-    const cleanText = cleanMarkdown(currentSummaryData.generated_summary);
-    
     const splitText = doc.splitTextToSize(cleanText, 180);
-    doc.text(splitText, 10, 20);
-    
-    doc.save("summary.pdf");
-});
+    doc.text(splitText, 10, 10);
+    doc.save("Summary.pdf");
+};
 
-function setChatInputEnabled(enabled) {
-    userInput.disabled = !enabled;
-    sendBtn.disabled = !enabled;
-    summaryBtn.style.display = enabled ? "flex" : "none"; 
-    userInput.placeholder = enabled ? "Ask a question..." : "Select a chat to start...";
-    if (!enabled) chatTitle.textContent = "Select a Conversation";
+
+// --- RENDER CITATIONS ---
+function renderTextWithCitations(element, text) {
+    let html = marked.parse(text);
+    
+    // 1. Handle full format: [Source: filename - Page X]
+    html = html.replace(/\[Source: (.*?) - Page (\d+)\]/g, (match, filename, page) => {
+        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 ${filename} (Pg ${page})</span>`;
+    });
+
+    // 2. Handle standard format: [Page X]
+    html = html.replace(/\[Page (\d+)\]/g, (match, page) => {
+        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 Page ${page}</span>`;
+    });
+
+    // 3. Handle lazy format: [4] -> Convert to Page 4 pill
+    // This fixes the issue where the AI just returns a number
+    html = html.replace(/\[(\d+)\]/g, (match, page) => {
+        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 Page ${page}</span>`;
+    });
+    
+    element.innerHTML = html;
+}
+// --- POPOVER PREVIEW LOGIC ---
+async function showCitationPreview(event, page) {
+    event.stopPropagation();
+    
+    const rect = event.target.getBoundingClientRect();
+    popover.style.left = `${rect.left}px`;
+    popover.style.top = `${rect.bottom + 10}px`; 
+    popover.style.display = "block";
+    
+    popoverTitle.textContent = `Source: Page ${page}`;
+    popoverContent.textContent = "Loading preview...";
+    
+    try {
+        const res = await fetch(`${API_BASE}/preview/${currentVectorStoreId}/${page}`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        
+        if (!res.ok) throw new Error("Failed to load");
+        const data = await res.json();
+        popoverContent.textContent = data.text; 
+        
+    } catch (e) {
+        popoverContent.textContent = "Error loading preview.";
+    }
 }
 
-sendBtn.addEventListener("click", handleSend);
-userInput.addEventListener("keypress", (e) => { if (e.key === "Enter" && !userInput.disabled) handleSend(); });
-searchInput.addEventListener("input", (e) => renderConversationList(e.target.value));
-logoutBtn.addEventListener("click", () => {
+// --- HELPERS ---
+function appendMessage(role, text) {
+    const div = document.createElement("div");
+    div.className = `message ${role}`;
+    const content = document.createElement("div");
+    content.className = "msg-content";
+    content.textContent = text;
+    div.appendChild(content);
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    return content;
+}
+
+async function loadChat(id) {
+    currentConversationId = id;
+    const res = await fetch(`${API_BASE}/conversations/${id}`, { headers: { "Authorization": `Bearer ${token}` } });
+    const data = await res.json();
+    currentVectorStoreId = data.vector_store_id;
+    document.getElementById("chatTitle").textContent = data.title;
+    
+    chatBox.innerHTML = "";
+    data.messages.forEach(m => {
+        const div = appendMessage(m.role, "");
+        renderTextWithCitations(div, m.content);
+    });
+    
+    userInput.disabled = false;
+    document.getElementById("sendBtn").disabled = false;
+    summaryBtn.style.display = "block"; // Show button when chat loads
+}
+
+async function loadConversations() {
+    const res = await fetch(`${API_BASE}/conversations`, { headers: { "Authorization": `Bearer ${token}` } });
+    const chats = await res.json();
+    const list = document.getElementById("conversationList");
+    list.innerHTML = "";
+    chats.forEach(c => {
+        const div = document.createElement("div");
+        div.className = `chat-item ${currentConversationId === c.id ? 'active' : ''}`;
+        div.textContent = c.title;
+        div.onclick = () => loadChat(c.id);
+        list.appendChild(div);
+    });
+}
+
+// Upload
+document.getElementById("pdfInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    if(!confirm("Upload this file?")) return;
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    if (currentConversationId) formData.append("conversation_id", currentConversationId);
+    
+    try {
+        const res = await fetch(`${API_BASE}/upload_pdf`, {
+            method: "POST", headers: { "Authorization": `Bearer ${token}` }, body: formData
+        });
+        const data = await res.json();
+        if(!currentConversationId) { loadConversations(); loadChat(data.conversation_id); }
+        else { alert("File added!"); }
+    } catch(e) { alert(e.message); }
+});
+
+document.getElementById("sendBtn").onclick = handleSend;
+userInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault(); 
+        if (!userInput.disabled) handleSend();
+    }
+});
+
+document.getElementById("newChatBtn").onclick = () => {
+    currentConversationId = null;
+    chatBox.innerHTML = "";
+    document.getElementById("chatTitle").textContent = "New Conversation";
+    summaryBtn.style.display = "none";
+};
+document.getElementById("logoutBtn").onclick = () => {
     localStorage.removeItem("accessToken");
     window.location.href = "login.html";
-});
+};

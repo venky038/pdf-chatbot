@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SaaS PDF Chat</title>
+    <title>Pro Chat RAG</title>
     <link rel="stylesheet" href="style.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -15,66 +14,64 @@
     
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="brand">📄 PDF Genius</div>
-            <div class="search-wrapper">
-                <input type="text" id="searchChats" placeholder="Filter chats...">
-            </div>
+            <div class="brand">📄 DocuMind AI</div>
+            <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
         </div>
-        
-        <div class="chat-list" id="conversationList">
-            </div>
-
+        <div class="chat-list" id="conversationList"></div>
         <div class="user-profile">
-            <div class="user-info" id="usernameDisplay">User</div>
-            <button class="logout-btn" id="logoutBtn">Log out</button>
+            <span id="usernameDisplay">User</span>
+            <button class="logout-link" id="logoutBtn">Sign Out</button>
         </div>
     </aside>
 
     <main class="chat-main">
         <div class="top-bar">
-            <div class="current-chat-title" id="chatTitle">Select a Conversation</div>
-            
+            <div class="chat-title" id="chatTitle">Select a Chat</div>
             <div class="top-actions">
-                <button id="summaryBtn" class="btn btn-secondary" style="display: none;">
-                    ✨ View Summary
-                </button>
+                <button class="btn-action" id="summaryBtn" style="display:none;">✨ Summary</button>
                 
-                <div class="upload-btn-wrapper">
-                    <button class="btn btn-primary">
-                        <span>+ New PDF</span>
-                    </button>
+                <label class="upload-label">
+                    <span>📎 Upload PDF</span>
                     <input type="file" id="pdfInput" accept=".pdf" />
-                </div>
+                </label>
             </div>
         </div>
 
         <div class="messages-container" id="chatBox">
             <div class="message bot">
                 <div class="msg-content">
-                    Welcome back! Select a chat from the sidebar or upload a new PDF to get started.
+                    Welcome! Upload a document or select a chat to begin.
                 </div>
             </div>
         </div>
 
         <div class="input-area">
             <div class="input-box">
-                <input type="text" id="userInput" placeholder="Type a message..." disabled />
-                <button id="sendBtn" class="btn btn-primary" disabled>Send</button>
+                <input type="text" id="userInput" placeholder="Ask a question..." disabled />
+                <button class="btn-send" id="sendBtn" disabled>➤</button>
             </div>
         </div>
     </main>
 
 </div>
 
-<div id="summaryModal" class="modal">
-    <div class="modal-content">
+<div id="citationPopover" class="citation-popover">
+    <div class="popover-header">
+        <span id="popoverTitle">Page Source</span>
+        <button class="popover-close" id="closePopover">&times;</button>
+    </div>
+    <div class="popover-body" id="popoverContent">Loading...</div>
+</div>
+
+<div id="summaryModal" class="modal-overlay">
+    <div class="modal-card">
         <div class="modal-header">
             <h3>Document Summary</h3>
             <button class="close-modal" id="closeModalBtn">&times;</button>
         </div>
-        <div id="summaryContent" style="line-height: 1.6; color: #334155;"></div>
-        <div style="margin-top: 1.5rem; text-align: right;">
-            <button id="downloadSummaryPdfBtn" class="btn btn-primary">Download Report</button>
+        <div id="summaryContent" class="modal-body">Loading...</div>
+        <div class="modal-footer">
+            <button class="btn-action" id="downloadSummaryBtn">Download Report</button>
         </div>
     </div>
 </div>

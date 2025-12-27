@@ -13,287 +13,315 @@ import asyncio
 import json
 import pickle
 import numpy as np
-import re
+import io
+from typing import AsyncGenerator
 
-# --- Setup ---
+# --- NEW IMPORTS FOR LLAMAPARSE ---
+try:
+    from llama_parse import LlamaParse
+    LLAMA_AVAILABLE = True
+except ImportError:
+    LLAMA_AVAILABLE = False
+
+# --- LOGGING SETUP ---
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
+    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s",
+    handlers=[logging.FileHandler("server.log", encoding='utf-8'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
+# --- CONFIG ---
 dotenv_path = find_dotenv()
 load_dotenv(dotenv_path=dotenv_path)
 
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
-if not PERPLEXITY_API_KEY:
-    logger.error("PERPLEXITY_API_KEY not found!")
+LLAMA_CLOUD_API_KEY = os.getenv("LLAMA_CLOUD_API_KEY")
+
+if not PERPLEXITY_API_KEY: logger.critical("PERPLEXITY_API_KEY is missing!")
+if not LLAMA_CLOUD_API_KEY: logger.warning("LLAMA_CLOUD_API_KEY is missing. LlamaParse will be skipped.")
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(APP_ROOT)
 VECTOR_STORE_DIR = os.path.join(PROJECT_ROOT, "vector_stores")
 
-# --- MODEL INITIALIZATION ---
-logger.info("Loading Embedding Model...")
-EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# --- RAPID OCR SETUP ---
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    ocr_engine = RapidOCR()
+    OCR_AVAILABLE = True
+    logger.info("✅ RapidOCR loaded.")
+except ImportError:
+    OCR_AVAILABLE = False
+    logger.warning("⚠️ RapidOCR not found.")
 
-logger.info("Loading Re-Ranker Model...")
-RERANKER = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+# --- MODELS ---
+try:
+    logger.info("Loading AI Models...")
+    EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    RERANKER = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    logger.info("✅ Models loaded.")
+except Exception as e:
+    logger.critical(f"❌ Failed to load models: {e}")
+    raise e
 
-class NoSearchableTextError(Exception):
-    pass
+class NoSearchableTextError(Exception): pass
 
-# --- Helper Functions ---
-
+# --- HELPER FUNCTIONS ---
 def _normalize_messages(system_prompt, history, new_user_content):
-    """STRICT NORMALIZATION to prevent API 400 errors."""
     final_messages = [{"role": "system", "content": system_prompt}]
-    
     processed_history = [m for m in history if m.get("role") in ["user", "assistant"]]
-    
     for msg in processed_history:
         role = msg["role"]
         content = msg.get("content", "").strip()
         if not content: continue 
-
         if final_messages[-1]["role"] == role:
             final_messages[-1]["content"] += f"\n\n{content}"
         else:
             final_messages.append({"role": role, "content": content})
-
     if final_messages[-1]["role"] == "user":
         final_messages[-1]["content"] += f"\n\n---\n{new_user_content}"
     else:
         final_messages.append({"role": "user", "content": new_user_content})
-        
     return final_messages
 
-# --- 1. INTELLIGENT ROUTER ---
-
 async def classify_intent(question: str) -> str:
-    """Decides: 'chat', 'summary', or 'rag'."""
     clean_q = question.strip().lower()
-
-    # A. Summary Intent
-    summary_triggers = ["summarize", "summary", "overview", "what is this document", "what is this pdf"]
-    if any(t in clean_q for t in summary_triggers) and any(x in clean_q for x in ["document", "pdf", "file", "paper", "it", "content"]):
-        return "summary"
-        
-    # B. Chat Intent
-    chat_triggers = ["hi", "hello", "thanks", "thank you", "bye", "good morning", "who are you"]
-    if len(clean_q) < 30 and any(t in clean_q for t in chat_triggers):
-        return "chat"
-    
-    # C. Default RAG
+    if any(t in clean_q for t in ["summarize", "summary", "overview", "what is this document"]): return "summary"
+    if len(clean_q) < 20 and any(t in clean_q for t in ["hi", "hello", "thanks", "bye"]): return "chat"
     return "rag"
 
-# --- 2. PDF PROCESSING WITH METADATA ---
+# --- PDF PROCESSING STRATEGIES ---
 
-def load_pdf_documents(pdf_path: str):
-    """Reads PDF page-by-page."""
+# 1. SMART HYBRID LOADER (Local Fallback)
+def extract_text_with_rapidocr(page):
+    if not OCR_AVAILABLE: return ""
+    try:
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        img_bytes = pix.tobytes("png")
+        result, _ = ocr_engine(img_bytes)
+        if not result: return ""
+        return "\n".join([line[1] for line in result])
+    except Exception: return ""
+
+def load_pdf_hybrid_local(pdf_path: str):
+    """Fallback method: Uses PyMuPDF + RapidOCR"""
     documents = []
     try:
         doc = fitz.open(pdf_path)
+        filename = os.path.basename(pdf_path)
+        logger.info(f"📖 [Hybrid] Processing {filename} locally...")
+        
         for i, page in enumerate(doc):
+            page_num = i + 1
             text = page.get_text()
+            
+            # Smart OCR Trigger: Low text density + images present
+            if len(text.strip()) < 50 and len(page.get_images()) > 0:
+                ocr_text = extract_text_with_rapidocr(page)
+                if len(ocr_text) > len(text): text = ocr_text
+            
             if len(text.strip()) > 10:
-                page_num = i + 1
-                # Inject Page Number for better Searchability
-                content_with_page = f"[Page {page_num}]\n{text}"
-                
                 documents.append(Document(
-                    page_content=content_with_page, 
-                    metadata={"page": page_num, "source": os.path.basename(pdf_path)}
+                    page_content=f"[Page {page_num}] {text}", 
+                    metadata={"page": page_num, "source": filename}
                 ))
         doc.close()
     except Exception as e:
-        logger.exception(f"Error reading PDF {pdf_path}")
-        return []
+        logger.error(f"❌ Hybrid Load Error: {e}")
     return documents
 
-def split_documents_preserving_metadata(documents):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    return splitter.split_documents(documents)
-
-def _process_and_save_sync(pdf_path, vector_store_id):
-    """Saves Indices with Metadata."""
-    documents = load_pdf_documents(pdf_path)
-    if not documents: raise NoSearchableTextError("No text found.")
+# 2. LLAMAPARSE LOADER (Cloud Primary)
+def load_pdf_llamaparse(pdf_path: str):
+    """Primary method: Uses LlamaCloud API"""
+    if not LLAMA_AVAILABLE or not LLAMA_CLOUD_API_KEY:
+        raise ImportError("LlamaParse not configured.")
     
-    chunks = split_documents_preserving_metadata(documents)
+    logger.info(f"☁️ [LlamaParse] Uploading {os.path.basename(pdf_path)} to LlamaCloud...")
     
-    # FAISS
-    vector_store = FAISS.from_documents(documents=chunks, embedding=EMBEDDINGS_MODEL)
-    store_path = os.path.join(VECTOR_STORE_DIR, vector_store_id)
-    vector_store.save_local(store_path)
+    parser = LlamaParse(
+        api_key=LLAMA_CLOUD_API_KEY,
+        result_type="markdown",  # Best for preserving tables
+        verbose=True
+    )
     
-    # BM25
-    tokenized_corpus = [chunk.page_content.lower().split() for chunk in chunks]
-    bm25 = BM25Okapi(tokenized_corpus)
+    # LlamaParse returns a list of objects
+    llama_docs = parser.load_data(pdf_path)
     
-    bm25_path = os.path.join(VECTOR_STORE_DIR, f"{vector_store_id}_bm25.pkl")
-    with open(bm25_path, "wb") as f:
-        pickle.dump({"bm25": bm25, "chunks": chunks}, f)
+    final_docs = []
+    filename = os.path.basename(pdf_path)
+    
+    for i, doc in enumerate(llama_docs):
+        # We assume LlamaParse returns pages roughly in order. 
+        # Metadata handling depends on response structure, but simple indexing works for most PDFs.
+        page_num = i + 1
+        content = doc.text
         
-    logger.info(f"Saved Hybrid Indices for: {vector_store_id}")
-    return "\n".join([d.page_content for d in documents])
+        if len(content.strip()) > 0:
+            final_docs.append(Document(
+                page_content=f"[Page {page_num}] {content}",
+                metadata={"page": page_num, "source": filename}
+            ))
+            
+    logger.info(f"☁️ [LlamaParse] Success! Extracted {len(final_docs)} segments.")
+    return final_docs
 
-async def process_pdf_for_rag(pdf_path, vector_store_id):
+
+def _process_and_save_sync(pdf_path, vector_store_id, is_append=False):
+    # STRATEGY SELECTION
+    documents = []
+    
+    # Try LlamaParse First
+    try:
+        documents = load_pdf_llamaparse(pdf_path)
+    except Exception as e:
+        logger.warning(f"⚠️ LlamaParse failed or quota exceeded ({e}). Switching to Hybrid Local.")
+        documents = [] # Reset
+    
+    # Fallback to Local Hybrid
+    if not documents:
+        documents = load_pdf_hybrid_local(pdf_path)
+        
+    if not documents: raise NoSearchableTextError("No text found in document.")
+
+    # Chunking
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_documents(documents)
+    
+    store_path = os.path.join(VECTOR_STORE_DIR, vector_store_id)
+    bm25_path = os.path.join(VECTOR_STORE_DIR, f"{vector_store_id}_bm25.pkl")
+    
+    # Save FAISS
+    if is_append and os.path.exists(store_path):
+        existing = FAISS.load_local(store_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
+        existing.merge_from(FAISS.from_documents(chunks, EMBEDDINGS_MODEL))
+        existing.save_local(store_path)
+    else:
+        FAISS.from_documents(chunks, EMBEDDINGS_MODEL).save_local(store_path)
+    
+    # Save BM25
+    all_chunks = chunks
+    if is_append and os.path.exists(bm25_path):
+        with open(bm25_path, "rb") as f: all_chunks = pickle.load(f)["chunks"] + chunks
+            
+    bm25 = BM25Okapi([c.page_content.lower().split() for c in all_chunks])
+    with open(bm25_path, "wb") as f: pickle.dump({"bm25": bm25, "chunks": all_chunks}, f)
+        
+    return f"Processed {len(documents)} pages."
+
+async def process_pdf_for_rag(pdf_path, vector_store_id, is_append=False):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _process_and_save_sync, pdf_path, vector_store_id)
+    return await loop.run_in_executor(None, _process_and_save_sync, pdf_path, vector_store_id, is_append)
 
-# --- 3. RETRIEVAL WITH CITATIONS ---
-
-def format_context_with_citations(docs):
-    formatted_context = []
+# --- RETRIEVAL & SEARCH ---
+def format_context(docs):
+    formatted = []
     for doc in docs:
-        page_num = doc.metadata.get("page", "?")
-        content = doc.page_content.replace("\n", " ") 
-        formatted_context.append(f"[Source: Page {page_num}]\n{content}")
-    return "\n\n".join(formatted_context)
+        p = doc.metadata.get("page", "?")
+        # Clean up filename if it has UUID prefix
+        full_src = doc.metadata.get("source", "doc")
+        src = full_src.split("_", 1)[1] if "_" in full_src else full_src
+        
+        formatted.append(f"[Source: {src} - Page {p}]\n{doc.page_content.replace(chr(10), ' ')}")
+    return "\n\n".join(formatted)
 
 def _get_global_context_sync(vector_store_id):
-    """Global Sampler for Summaries."""
     bm25_path = os.path.join(VECTOR_STORE_DIR, f"{vector_store_id}_bm25.pkl")
     if not os.path.exists(bm25_path): return ""
-    
-    with open(bm25_path, "rb") as f:
-        chunks = pickle.load(f)["chunks"]
-    
-    if len(chunks) < 50:
-        return format_context_with_citations(chunks)
-    
-    indices = np.linspace(0, len(chunks)-1, num=50, dtype=int)
-    selected_chunks = [chunks[i] for i in indices]
-    
-    return format_context_with_citations(selected_chunks)
+    with open(bm25_path, "rb") as f: chunks = pickle.load(f)["chunks"]
+    # Sample chunks for summary
+    indices = np.linspace(0, len(chunks)-1, num=min(40, len(chunks)), dtype=int)
+    return format_context([chunks[i] for i in indices])
 
-def _hybrid_search_sync(queries, vector_store_id):
-    """
-    Hybrid Search (Vector + BM25 + Re-Ranking).
-    Accepts a list of queries, but we are just passing [original_question] now.
-    """
+def _hybrid_search_sync(question, vector_store_id):
     store_path = os.path.join(VECTOR_STORE_DIR, vector_store_id)
     bm25_path = os.path.join(VECTOR_STORE_DIR, f"{vector_store_id}_bm25.pkl")
-    
     if not os.path.exists(bm25_path): return ""
 
     vector_store = FAISS.load_local(store_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
-    with open(bm25_path, "rb") as f:
-        data = pickle.load(f)
-        bm25 = data["bm25"]
-        all_chunks = data["chunks"] 
-
-    unique_contents = set()
-    combined_candidates = []
-
-    for q in queries:
-        # A. Vector
-        docs = vector_store.similarity_search(q, k=15) # Increased slightly
-        for d in docs:
-            if d.page_content not in unique_contents:
-                unique_contents.add(d.page_content)
-                combined_candidates.append(d)
-        
-        # B. BM25
-        keywords = q.lower().split()
-        top_docs_bm25 = bm25.get_top_n(keywords, all_chunks, n=15) # Increased slightly
-        
-        for d in top_docs_bm25:
-            if d.page_content not in unique_contents:
-                unique_contents.add(d.page_content)
-                combined_candidates.append(d)
-
-    if not combined_candidates: return ""
-
-    # C. Re-Rank
-    original_q = queries[-1]
-    pairs = [[original_q, d.page_content] for d in combined_candidates]
-    scores = RERANKER.predict(pairs)
+    with open(bm25_path, "rb") as f: data = pickle.load(f)
     
-    scored_docs = sorted(zip(combined_candidates, scores), key=lambda x: x[1], reverse=True)
-    top_docs = [doc for doc, score in scored_docs[:6]]
+    unique_docs = {d.page_content: d for d in vector_store.similarity_search(question, k=20)}
+    for d in data["bm25"].get_top_n(question.lower().split(), data["chunks"], n=20): unique_docs[d.page_content] = d
     
-    return format_context_with_citations(top_docs)
+    candidates = list(unique_docs.values())
+    if not candidates: return ""
 
-# --- 4. GENERATION ---
+    scores = RERANKER.predict([[question, d.page_content] for d in candidates])
+    top_docs = [doc for doc, _ in sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)[:8]]
+    return format_context(top_docs)
 
-async def get_perplexity_response(context: str, question: str, history: list[dict], mode="rag"):
+# --- ANSWERING & SUMMARY ---
+
+async def answer_question_stream(question: str, vector_store_id: str, history: list[dict]) -> AsyncGenerator[str, None]:
+    intent = await classify_intent(question)
+    
+    if intent == "chat":
+        yield "Hello! How can I help you with your documents today?"
+        return
+
+    loop = asyncio.get_event_loop()
+    context = ""
+    
+    try:
+        if intent == "summary":
+            context = await loop.run_in_executor(None, _get_global_context_sync, vector_store_id)
+            system_prompt = "You are an expert analyst. Summarize the document content. Always cite pages using the format [Page X]."
+        else:
+            context = await loop.run_in_executor(None, _hybrid_search_sync, question, vector_store_id)
+            system_prompt = (
+                "You are a helpful assistant. Answer the user's question based ONLY on the Context below.\n"
+                "1. CRITICAL: You MUST cite pages using the exact format: [Page X] (e.g., [Page 4], [Page 12]).\n"
+                "2. Do not use simple numbers like [1]. Use [Page 1].\n"
+                "3. If the answer is missing, say 'I cannot find this information'."
+            )
+
+        if not context:
+            yield "I cannot find relevant information in the document."
+            return
+
+        messages = _normalize_messages(system_prompt, history, f"CONTEXT:\n{context}\n\nUSER QUESTION: {question}")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", "https://api.perplexity.ai/chat/completions", 
+                                     headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}, 
+                                     json={"model": "sonar-pro", "messages": messages, "stream": True}) as response:
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            chunk = json.loads(line[6:])
+                            content = chunk["choices"][0]["delta"].get("content", "")
+                            if content: yield content
+                        except: pass
+    except Exception as e:
+        logger.error(f"Stream Error: {e}")
+        yield "⚠️ Error processing request."
+
+# --- FIXED SUMMARY FUNCTION ---
+async def generate_summary(transcript: str):
+    """
+    Generates a real summary using Perplexity API based on the chat transcript/context.
+    """
+    logger.info("Generating real summary via API...")
+    
+    # We use a simplified prompt to summarize the discussion or the content found so far
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Provide a concise, professional summary of the following conversation/document content."},
+        {"role": "user", "content": f"Summarize this interaction and key information found:\n\n{transcript[:15000]}"} # Limit char count
+    ]
+    
     url = "https://api.perplexity.ai/chat/completions"
-    
-    if mode == "chat":
-        system_prompt = "You are a friendly AI assistant."
-        final_content = question
-    elif mode == "summary":
-        system_prompt = (
-            "You are an expert analyst. Provide a comprehensive summary of the document. "
-            "Use the provided context chunks which are marked with [Source: Page X]. "
-            "Cite the page numbers in your summary where appropriate."
-        )
-        final_content = f"DOCUMENT SAMPLES:\n{context}\n\nREQUEST: {question}"
-    else:
-        system_prompt = (
-            "You are a strict RAG assistant. Answer the user's question "
-            "ONLY using the provided CONTEXT.\n"
-            "Rules:\n"
-            "1. Each fact you state MUST be followed by a citation like [Page X].\n"
-            "2. If the answer is not in the Context, say 'I cannot find this information'.\n"
-            "3. Do not use external knowledge."
-        )
-        final_content = f"CONTEXT:\n{context}\n\nUSER QUESTION: {question}"
-
-    messages = _normalize_messages(system_prompt, history, final_content)
-
     payload = {"model": "sonar-pro", "messages": messages, "stream": False}
     headers = {"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=headers, json=payload)
-            if response.status_code != 200: return f"⚠️ API Error ({response.status_code})."
-            return response.json()["choices"][0]["message"]["content"]
-    except Exception:
-        return "⚠️ Connection error."
-
-# --- MAIN ENTRY POINT ---
-
-async def answer_question(question: str, vector_store_id: str, history: list[dict]):
-    intent = await classify_intent(question)
-    context = ""
-    
-    if intent == "summary":
-        loop = asyncio.get_event_loop()
-        try:
-            context = await loop.run_in_executor(None, _get_global_context_sync, vector_store_id)
-        except Exception:
-            context = "Error retrieving global context."
-
-    elif intent == "rag":
-        loop = asyncio.get_event_loop()
-        try:
-            # DIRECT CALL (No Expansion)
-            # We pass the single question as a list because _hybrid_search_sync expects a list
-            queries = [question] 
-            context = await loop.run_in_executor(None, _hybrid_search_sync, queries, vector_store_id)
-            if not context: context = "No relevant context found."
-        except Exception:
-            return "⚠️ Search failed."
-            
-    return await get_perplexity_response(context, question, history, mode=intent)
-
-# --- Extra Helpers ---
-async def generate_conversation_title(text: str):
-    url = "https://api.perplexity.ai/chat/completions"
-    prompt = f"Generate a single-line title (max 5 words) for this text. Do NOT use markdown. Text:\n{text[:1000]}"
-    messages = [{"role": "user", "content": prompt}]
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"}, json={"model":"sonar-pro","messages":messages})
-        return resp.json()["choices"][0]["message"]["content"].strip('"').split("\n")[0]
-
-async def generate_summary(transcript: str):
-    url = "https://api.perplexity.ai/chat/completions"
-    prompt = f"Summarize this chat:\n\n{transcript}"
-    messages = [{"role": "user", "content": prompt}]
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"}, json={"model":"sonar-pro","messages":messages})
-        return resp.json()["choices"][0]["message"]["content"]
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+            else:
+                logger.error(f"Summary API Error: {response.text}")
+                return "Failed to generate summary from AI provider."
+    except Exception as e:
+        logger.error(f"Summary Exception: {e}")
+        return "An error occurred while generating the summary."
