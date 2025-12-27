@@ -3,59 +3,82 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PDF Chatbot</title>
+    <title>SaaS PDF Chat</title>
     <link rel="stylesheet" href="style.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
-    <div class="app-container">
-        <div class="sidebar" id="sidebar">
-            <header>
-                <h2>My Chats</h2>
-                <input type="search" id="searchChats" placeholder="Search chats..." />
-                <div class="user-info">Logged in as: <strong id="usernameDisplay">...</strong></div>
-                <button id="logoutBtn">Logout</button>
-            </header>
-            <div class="conversation-list" id="conversationList">
+
+<div class="app-layout">
+    
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">📄 PDF Genius</div>
+            <div class="search-wrapper">
+                <input type="text" id="searchChats" placeholder="Filter chats...">
+            </div>
+        </div>
+        
+        <div class="chat-list" id="conversationList">
+            </div>
+
+        <div class="user-profile">
+            <div class="user-info" id="usernameDisplay">User</div>
+            <button class="logout-btn" id="logoutBtn">Log out</button>
+        </div>
+    </aside>
+
+    <main class="chat-main">
+        <div class="top-bar">
+            <div class="current-chat-title" id="chatTitle">Select a Conversation</div>
+            
+            <div class="top-actions">
+                <button id="summaryBtn" class="btn btn-secondary" style="display: none;">
+                    ✨ View Summary
+                </button>
+                
+                <div class="upload-btn-wrapper">
+                    <button class="btn btn-primary">
+                        <span>+ New PDF</span>
+                    </button>
+                    <input type="file" id="pdfInput" accept=".pdf" />
                 </div>
+            </div>
         </div>
 
-        <div class="resizer" id="resizer"></div>
-
-        <div class="chat-container" id="chatContainer">
-            <header>
-                <h2 id="chatTitle">📄 PDF Chat Assistant</h2>
-                <div class="header-controls">
-                    <button id="summaryBtn" class="header-button" style="display: none;">Show Summary</button>
-                    <div class="upload-box">
-                        <input type="file" id="pdfInput" accept=".pdf" />
-                        <label for="pdfInput" class="upload-label" id="pdfLabel">Choose PDF</label>
-                        <button id="uploadBtn" type="button" onclick="event.preventDefault()">Upload PDF</button>
-                    </div>
+        <div class="messages-container" id="chatBox">
+            <div class="message bot">
+                <div class="msg-content">
+                    Welcome back! Select a chat from the sidebar or upload a new PDF to get started.
                 </div>
-            </header>
-            <div id="chatBox" class="chat-box">
-                <div class="message bot" id="welcomeMessage">Hello! Upload a PDF or select a chat.</div>
             </div>
+        </div>
+
+        <div class="input-area">
             <div class="input-box">
-                <input type="text" id="userInput" placeholder="Ask a question..." disabled />
-                <button id="sendBtn" type="button" disabled>Send</button>
+                <input type="text" id="userInput" placeholder="Type a message..." disabled />
+                <button id="sendBtn" class="btn btn-primary" disabled>Send</button>
             </div>
         </div>
-    </div>
-    <div class="modal-backdrop" id="summaryModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Conversation Summary</h3>
-                <button class="modal-close" id="closeModalBtn">&times;</button>
-            </div>
-            <div class="modal-body" id="summaryContent"></div>
-            <div class="modal-footer">
-                <button id="downloadPdfBtn" class="header-button" disabled>Download as PDF</button>
-            </div>
+    </main>
+
+</div>
+
+<div id="summaryModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Document Summary</h3>
+            <button class="close-modal" id="closeModalBtn">&times;</button>
+        </div>
+        <div id="summaryContent" style="line-height: 1.6; color: #334155;"></div>
+        <div style="margin-top: 1.5rem; text-align: right;">
+            <button id="downloadSummaryPdfBtn" class="btn btn-primary">Download Report</button>
         </div>
     </div>
-    <script src="script.js"></script>
+</div>
+
+<script src="script.js"></script>
 </body>
 </html>

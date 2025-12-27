@@ -3,27 +3,84 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - PDF Chat</title>
+    <title>Welcome - PDF Chat</title>
     <link rel="stylesheet" href="login.style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="login-container">
-        <h2>📄 PDF Chat Assistant</h2>
-        <form id="loginForm">
-            <h3>Login</h3>
-            <input type="text" id="username" placeholder="Username" required>
-            <input type="password" id="password" placeholder="Password" required>
-            <button type="submit">Login</button>
-            <p id="error-message"></p>
-        </form>
-        <form id="registerForm">
-            <h3>Register</h3>
-            <input type="text" id="reg-username" placeholder="Username" required>
-            <input type="password" id="reg-password" placeholder="Password" required>
-            <button type="submit">Register</button>
-            <p id="register-message"></p>
-        </form>
+    <div class="background-mesh"></div>
+    
+    <div class="auth-card">
+        <div class="brand-header">
+            <div class="logo-icon">📄</div>
+            <h1>PDF Chat AI</h1>
+            <p>Your intelligent document assistant</p>
+        </div>
+
+        <div id="loginSection" class="form-section active">
+            <form id="loginForm">
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter your username" required>
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="••••••••" required>
+                </div>
+                
+                <p id="error-message" class="status-msg error"></p>
+                
+                <button type="submit" class="auth-btn">Sign In</button>
+            </form>
+            
+            <div class="toggle-text">
+                Don't have an account? <span onclick="toggleForms('register')">Create one</span>
+            </div>
+        </div>
+
+        <div id="registerSection" class="form-section">
+            <form id="registerForm">
+                <div class="input-group">
+                    <label>Choose Username</label>
+                    <input type="text" id="reg-username" placeholder="Pick a username" required>
+                </div>
+                <div class="input-group">
+                    <label>Choose Password</label>
+                    <input type="password" id="reg-password" placeholder="••••••••" required>
+                </div>
+
+                <p id="register-message" class="status-msg success"></p>
+
+                <button type="submit" class="auth-btn secondary">Create Account</button>
+            </form>
+
+            <div class="toggle-text">
+                Already have an account? <span onclick="toggleForms('login')">Sign In</span>
+            </div>
+        </div>
     </div>
+
     <script src="login.js"></script>
+    <script>
+        // Simple UI Toggle Logic
+        function toggleForms(mode) {
+            const loginSec = document.getElementById('loginSection');
+            const regSec = document.getElementById('registerSection');
+            const errorMsg = document.getElementById('error-message');
+            const regMsg = document.getElementById('register-message');
+
+            // Clear messages when switching
+            if(errorMsg) errorMsg.textContent = "";
+            if(regMsg) regMsg.textContent = "";
+
+            if (mode === 'register') {
+                loginSec.classList.remove('active');
+                regSec.classList.add('active');
+            } else {
+                regSec.classList.remove('active');
+                loginSec.classList.add('active');
+            }
+        }
+    </script>
 </body>
 </html>
