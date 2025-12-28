@@ -16,8 +16,15 @@
         <div class="sidebar-header">
             <div class="brand">📄 DocuMind AI</div>
             <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
+            <div class="search-bar">
+                <input type="text" id="searchInput" placeholder="🔍 Search..." onkeyup="searchConversations(this.value)" />
+            </div>
         </div>
         <div class="chat-list" id="conversationList"></div>
+        <div class="sidebar-controls">
+            <button class="sidebar-btn" title="Dark Mode" onclick="toggleDarkMode()">🌙</button>
+            <button class="sidebar-btn" title="Statistics" onclick="loadUserStats()">📊</button>
+        </div>
         <div class="user-profile">
             <span id="usernameDisplay">User</span>
             <button class="logout-link" id="logoutBtn">Sign Out</button>
@@ -29,6 +36,9 @@
             <div class="chat-title" id="chatTitle">Select a Chat</div>
             <div class="top-actions">
                 <button class="btn-action" id="summaryBtn" style="display:none;">✨ Summary</button>
+                <button class="btn-action" id="statsBtn" style="display:none;" onclick="showConversationStats()">📊 Stats</button>
+                <button class="btn-action" id="shareBtn" style="display:none;" onclick="createShareLink()">🔗 Share</button>
+                <button class="btn-action" id="exportBtn" style="display:none;">💾 Export</button>
                 
                 <label class="upload-label">
                     <span>📎 Upload PDF</span>
@@ -76,6 +86,22 @@
     </div>
 </div>
 
-<script src="script.js"></script>
+<div id="exportModal" class="modal-overlay">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3>Export Conversation</h3>
+            <button class="close-modal" id="closeExportModalBtn">&times;</button>
+        </div>
+        <div class="modal-body" style="text-align: center; padding: 2rem;">
+            <p style="margin-bottom: 1.5rem; color: #666;">Choose export format:</p>
+            <button class="btn-action" id="exportPdfBtn" style="margin: 0.5rem; width: 150px;">📄 PDF</button>
+            <button class="btn-action" id="exportHtmlBtn" style="margin: 0.5rem; width: 150px;">🌐 HTML</button>
+            <button class="btn-action" id="exportJsonBtn" style="margin: 0.5rem; width: 150px;">📋 JSON</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="script_enhanced.js"></script>
 </body>
 </html>
