@@ -1,107 +1,181 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
-    <title>Pro Chat RAG</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocuMind AI - Intelligent PDF Chat</title>
     <link rel="stylesheet" href="style.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
+
 <body>
+    <div id="uploadOverlay" class="upload-overlay">
+        <div class="spinner-global"></div>
+        <div class="upload-text" style="margin-top: 2rem; font-weight: 700; font-size: 1.2rem; color: var(--primary);">
+            Processing Documents...</div>
+    </div>
 
-<div class="app-layout">
-    
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <div class="brand">📄 DocuMind AI</div>
-            <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
-            <div class="search-bar">
-                <input type="text" id="searchInput" placeholder="🔍 Search..." onkeyup="searchConversations(this.value)" />
+    <div class="app-layout">
+
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="brand">📄 DocuMind AI</div>
+                <button class="new-chat-btn" id="newChatBtn">
+                    <span>+</span> New Conversation
+                </button>
+                <div class="search-bar">
+                    <input type="text" id="searchInput" placeholder="Search conversations (Ctrl+K)"
+                        onkeyup="searchConversations(this.value)" />
+                </div>
             </div>
-        </div>
-        <div class="chat-list" id="conversationList"></div>
-        <div class="sidebar-controls">
-            <button class="sidebar-btn" title="Dark Mode" onclick="toggleDarkMode()">🌙</button>
-            <button class="sidebar-btn" title="Statistics" onclick="loadUserStats()">📊</button>
-        </div>
-        <div class="user-profile">
-            <span id="usernameDisplay">User</span>
-            <button class="logout-link" id="logoutBtn">Sign Out</button>
-        </div>
-    </aside>
 
-    <main class="chat-main">
-        <div class="top-bar">
-            <div class="chat-title" id="chatTitle">Select a Chat</div>
-            <div class="top-actions">
-                <button class="btn-action" id="summaryBtn" style="display:none;">✨ Summary</button>
-                <button class="btn-action" id="statsBtn" style="display:none;" onclick="showConversationStats()">📊 Stats</button>
-                <button class="btn-action" id="shareBtn" style="display:none;" onclick="createShareLink()">🔗 Share</button>
-                <button class="btn-action" id="exportBtn" style="display:none;">💾 Export</button>
-                
-                <label class="upload-label">
-                    <span>📎 Upload PDF</span>
-                    <input type="file" id="pdfInput" accept=".pdf" />
-                </label>
+            <div class="chat-list" id="conversationList"></div>
+
+            <div class="sidebar-footer">
+                <div class="sidebar-controls">
+                    <button class="sidebar-btn" title="Toggle Theme" onclick="toggleDarkMode()">🌓</button>
+                    <button class="sidebar-btn" title="Dashboard Stats" onclick="loadUserStats()">📊</button>
+                </div>
+                <div class="user-profile">
+                    <div style="display: flex; flex-direction: column; flex: 1;">
+                        <span class="username" id="usernameDisplay">User</span>
+                        <button id="logoutBtn" class="logout-link"
+                            style="background:none; border:none; text-align:left; padding:0; width:fit-content;">Sign
+                            Out</button>
+                    </div>
+                </div>
             </div>
-        </div>
+        </aside>
 
-        <div class="messages-container" id="chatBox">
-            <div class="message bot">
-                <div class="msg-content">
-                    Welcome! Upload a document or select a chat to begin.
+        <main class="chat-main">
+            <div class="top-bar">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <div class="chat-title" id="chatTitle">Select a Conversation</div>
+                    <div id="conversationTags" class="tags-wrapper"></div>
+                </div>
+
+                <div class="top-actions">
+                    <button class="btn-action" id="summaryBtn" style="display:none;">✨ Summary</button>
+                    <button class="btn-action" id="shareBtn" style="display:none;" onclick="createShareLink()">🔗
+                        Share</button>
+                    <button class="btn-action" id="exportBtn" style="display:none;">💾 Export</button>
+                    <button class="btn-action" id="chatStatsBtn" style="display:none;"
+                        onclick="showConversationStats()">📊 Stats</button>
+                    <button class="btn-action" id="deleteBtn" style="display:none; color: #ef4444;"
+                        onclick="deleteConversation(currentConversationId)">🗑️ Delete</button>
+
+                    <label class="upload-label">
+                        <span id="uploadLabelText">📎 Upload</span>
+                        <input type="file" id="pdfInput" accept=".pdf,.png,.jpg,.jpeg,.webp" />
+                    </label>
+                </div>
+            </div>
+
+            <div class="messages-container" id="chatBox">
+                <div class="message bot">
+                    <div class="msg-content">
+                        Hello! I'm your AI document assistant. Upload a PDF or image to start analyzing!
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-box">
+                    <input type="text" id="userInput" placeholder="Ask anything about your documents..." disabled />
+                    <button class="btn-send" id="sendBtn" disabled>Send</button>
+                </div>
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Floating Citation Popover -->
+    <div id="citationPopover" class="context-menu"
+        style="display: none; max-width: 400px; padding: 1.5rem; white-space: normal; overflow: visible;">
+        <div
+            style="display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <strong id="popoverTitle" style="color: var(--primary); font-family: 'Outfit';">Source Reference</strong>
+            <button onclick="document.getElementById('citationPopover').style.display='none'"
+                style="border:none; background:none; cursor:pointer; font-size: 1.2rem; color: var(--text-muted);">&times;</button>
+        </div>
+        <div id="popoverContent"
+            style="font-size: 0.95rem; line-height: 1.6; color: var(--text-main); max-height: 250px; overflow-y: auto;">
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="statsModal" class="modal-overlay">
+        <div class="modal-card" style="max-width: 450px;">
+            <div class="modal-header">
+                <h3>📊 Usage Dashboard</h3>
+                <button class="close-modal"
+                    onclick="document.getElementById('statsModal').style.display='none'">&times;</button>
+            </div>
+            <div id="statsContent" class="modal-body" style="padding: 2rem;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                    <div
+                        style="background: var(--bg-app); padding: 1.5rem; border-radius: 16px; text-align: center; border: 1px solid var(--border);">
+                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--primary);" id="stat-convs">0</div>
+                        <small
+                            style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Chats</small>
+                    </div>
+                    <div
+                        style="background: var(--bg-app); padding: 1.5rem; border-radius: 16px; text-align: center; border: 1px solid var(--border);">
+                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--primary);" id="stat-questions">0
+                        </div>
+                        <small
+                            style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Questions</small>
+                    </div>
+                    <div
+                        style="background: var(--bg-app); padding: 1.5rem; border-radius: 16px; text-align: center; border: 1px solid var(--border);">
+                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--primary);" id="stat-pdfs">0</div>
+                        <small
+                            style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">PDFs</small>
+                    </div>
+                    <div
+                        style="background: var(--bg-app); padding: 1.5rem; border-radius: 16px; text-align: center; border: 1px solid var(--border);">
+                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--primary);" id="stat-msgs">0</div>
+                        <small
+                            style="color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Messages</small>
+                    </div>
                 </div>
             </div>
         </div>
+    </div>
 
-        <div class="input-area">
-            <div class="input-box">
-                <input type="text" id="userInput" placeholder="Ask a question..." disabled />
-                <button class="btn-send" id="sendBtn" disabled>➤</button>
+    <div id="summaryModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>✨ AI Summary Report</h3>
+                <button class="close-modal" id="closeModalBtn">&times;</button>
+            </div>
+            <div id="summaryContent" class="modal-body"></div>
+            <div class="modal-header" style="border-top: 1px solid var(--border); border-bottom: none;">
+                <button class="new-chat-btn" id="downloadSummaryBtn" style="width: 100%;">Download PDF Report</button>
             </div>
         </div>
-    </main>
-
-</div>
-
-<div id="citationPopover" class="citation-popover">
-    <div class="popover-header">
-        <span id="popoverTitle">Page Source</span>
-        <button class="popover-close" id="closePopover">&times;</button>
     </div>
-    <div class="popover-body" id="popoverContent">Loading...</div>
-</div>
 
-<div id="summaryModal" class="modal-overlay">
-    <div class="modal-card">
-        <div class="modal-header">
-            <h3>Document Summary</h3>
-            <button class="close-modal" id="closeModalBtn">&times;</button>
-        </div>
-        <div id="summaryContent" class="modal-body">Loading...</div>
-        <div class="modal-footer">
-            <button class="btn-action" id="downloadSummaryBtn">Download Report</button>
+    <div id="exportModal" class="modal-overlay">
+        <div class="modal-card" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>💾 Export Chat</h3>
+                <button class="close-modal" id="closeExportModalBtn">&times;</button>
+            </div>
+            <div class="modal-body" style="display: grid; gap: 1rem; padding: 2rem;">
+                <button class="btn-action" id="exportPdfBtn" style="justify-content: center;">📄 As PDF</button>
+                <button class="btn-action" id="exportHtmlBtn" style="justify-content: center;">🌐 As HTML</button>
+                <button class="btn-action" id="exportJsonBtn" style="justify-content: center;">📋 As JSON</button>
+            </div>
         </div>
     </div>
-</div>
 
-<div id="exportModal" class="modal-overlay">
-    <div class="modal-card">
-        <div class="modal-header">
-            <h3>Export Conversation</h3>
-            <button class="close-modal" id="closeExportModalBtn">&times;</button>
-        </div>
-        <div class="modal-body" style="text-align: center; padding: 2rem;">
-            <p style="margin-bottom: 1.5rem; color: #666;">Choose export format:</p>
-            <button class="btn-action" id="exportPdfBtn" style="margin: 0.5rem; width: 150px;">📄 PDF</button>
-            <button class="btn-action" id="exportHtmlBtn" style="margin: 0.5rem; width: 150px;">🌐 HTML</button>
-            <button class="btn-action" id="exportJsonBtn" style="margin: 0.5rem; width: 150px;">📋 JSON</button>
-        </div>
-    </div>
-</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<script src="script_enhanced.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="script.js"></script>
 </body>
+
 </html>

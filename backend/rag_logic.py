@@ -14,6 +14,7 @@ import json
 import pickle
 import numpy as np
 import io
+import base64
 from typing import AsyncGenerator
 
 # --- LOGGING SETUP ---
@@ -82,6 +83,39 @@ async def classify_intent(question: str) -> str:
     if len(clean_q) < 20 and any(t in clean_q for t in ["hi", "hello", "thanks", "bye"]): return "chat"
     return "rag"
 
+async def generate_one_liner_summary(text_content: str) -> str:
+    """Generates a one-line summary of the document content."""
+    if not text_content: return "New Chat"
+    
+    prompt = (
+        "Based on the following document excerpt, generate a concise one-line title (max 5-7 words). "
+        "The title should be descriptive of the core subject. "
+        "Do not use introductory phrases. Just the title text:\n\n"
+        f"{text_content[:3000]}"
+    )
+    
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "sonar-pro",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 60
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            summary = data["choices"][0]["message"]["content"].strip().replace('"', '').replace('.', '').replace('*', '')
+            return summary if summary else "New Document"
+    except Exception as e:
+        logger.error(f"Failed to generate summary: {e}")
+        return "Processed Document"
+
 # --- PDF PROCESSING (LOCAL HYBRID ONLY) ---
 def extract_text_with_rapidocr(page):
     if not OCR_AVAILABLE: return ""
@@ -119,9 +153,94 @@ def load_pdf_hybrid_local(pdf_path: str):
         logger.error(f"❌ Hybrid Load Error: {e}")
     return documents
 
-def _process_and_save_sync(pdf_path, vector_store_id, is_append=False):
-    # DIRECT LOCAL PROCESSING - LLAMAPARSE REMOVED
-    documents = load_pdf_hybrid_local(pdf_path)
+def encode_image(image_path: str) -> str | None:
+    """Encodes an image file to base64."""
+    try:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Error encoding image {image_path}: {e}")
+        return None
+
+async def extract_text_with_perplexity_vision(image_path: str):
+    """Uses Perplexity Vision API to extract text & describe images."""
+    try:
+        base64_image = encode_image(image_path)
+        if not base64_image: return None
+
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar-pro",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract all text from this image. If it contains charts or diagrams, describe them in detail. Provide a technical summary of the content."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                }
+            ],
+            "max_tokens": 2048
+        }
+        headers = {
+            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+            else:
+                logger.error(f"Perplexity Vision API Error: {response.status_code}")
+                return None
+    except Exception as e:
+        logger.error(f"Perplexity Vision Exception: {e}")
+        return None
+
+def extract_text_from_image_local(image_path: str):
+    """OCR fallback using RapidOCR"""
+    if not OCR_AVAILABLE: return ""
+    try:
+        result, _ = ocr_engine(image_path)
+        if not result: return ""
+        return "\n".join([line[1] for line in result])
+    except Exception as e:
+        logger.error(f"Local OCR Error: {e}")
+        return ""
+
+async def load_image_for_rag(image_path: str):
+    """Process image using Perplexity Vision (primary) or local OCR (fallback)"""
+    documents = []
+    filename = os.path.basename(image_path)
+    logger.info(f"🖼️ Processing image {filename}...")
+    
+    # Try Perplexity Vision first (now async)
+    text = await extract_text_with_perplexity_vision(image_path)
+    
+    # Fallback to local OCR if Perplexity fails
+    if not text:
+        logger.info(f"  ⏭️ Perplexity Vision failed. Falling back to local OCR...")
+        text = extract_text_from_image_local(image_path)
+    
+    if text and len(text.strip()) > 10:
+        documents.append(Document(
+            page_content=f"[Image: {filename}]\n{text}",
+            metadata={"page": 1, "source": filename}
+        ))
+    return documents
+
+async def _process_and_save_async(file_path, vector_store_id, is_append=False):
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == ".pdf":
+        # PyMuPDF processing is CPU bound, run in thread
+        loop = asyncio.get_event_loop()
+        documents = await loop.run_in_executor(None, load_pdf_hybrid_local, file_path)
+    elif ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        documents = await load_image_for_rag(file_path)
+    else:
+        raise ValueError(f"Unsupported file extension: {ext}")
         
     if not documents: raise NoSearchableTextError("No text found in document.")
 
@@ -132,27 +251,32 @@ def _process_and_save_sync(pdf_path, vector_store_id, is_append=False):
     store_path = os.path.join(VECTOR_STORE_DIR, vector_store_id)
     bm25_path = os.path.join(VECTOR_STORE_DIR, f"{vector_store_id}_bm25.pkl")
     
-    # Save FAISS
-    if is_append and os.path.exists(store_path):
-        existing = FAISS.load_local(store_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
-        existing.merge_from(FAISS.from_documents(chunks, EMBEDDINGS_MODEL))
-        existing.save_local(store_path)
-    else:
-        FAISS.from_documents(chunks, EMBEDDINGS_MODEL).save_local(store_path)
-    
-    # Save BM25
-    all_chunks = chunks
-    if is_append and os.path.exists(bm25_path):
-        with open(bm25_path, "rb") as f: all_chunks = pickle.load(f)["chunks"] + chunks
-            
-    bm25 = BM25Okapi([c.page_content.lower().split() for c in all_chunks])
-    with open(bm25_path, "wb") as f: pickle.dump({"bm25": bm25, "chunks": all_chunks}, f)
-        
-    return f"Processed {len(documents)} pages."
-
-async def process_pdf_for_rag(pdf_path, vector_store_id, is_append=False):
+    # Run heavy computation in executor
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _process_and_save_sync, pdf_path, vector_store_id, is_append)
+    def compute_and_save():
+        # Save FAISS
+        if is_append and os.path.exists(store_path):
+            existing = FAISS.load_local(store_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
+            existing.merge_from(FAISS.from_documents(chunks, EMBEDDINGS_MODEL))
+            existing.save_local(store_path)
+        else:
+            FAISS.from_documents(chunks, EMBEDDINGS_MODEL).save_local(store_path)
+        
+        # Save BM25
+        all_chunks = chunks
+        if is_append and os.path.exists(bm25_path):
+            with open(bm25_path, "rb") as f: all_chunks = pickle.load(f)["chunks"] + chunks
+                
+        bm25 = BM25Okapi([c.page_content.lower().split() for c in all_chunks])
+        with open(bm25_path, "wb") as f: pickle.dump({"bm25": bm25, "chunks": all_chunks}, f)
+        
+        preview = " ".join([d.page_content for d in documents[:2]])
+        return {"status": "success", "preview": preview[:5000]}
+
+    return await loop.run_in_executor(None, compute_and_save)
+
+async def process_file_for_rag(file_path, vector_store_id, is_append=False):
+    return await _process_and_save_async(file_path, vector_store_id, is_append)
 
 # --- RETRIEVAL & SEARCH (Same as before) ---
 def format_context(docs):
@@ -190,7 +314,7 @@ async def answer_question_stream(question: str, vector_store_id: str, history: l
     intent = await classify_intent(question)
     # PRIVATE MODE: Do not answer general questions - only answer from uploaded PDFs
     if intent == "chat":
-        yield "I can only answer questions related to your uploaded documents. Please ask about the content in your PDFs."
+        yield "I can only answer questions related to your uploaded documents (PDFs or Images). Please ask about the content in your files."
         return
     loop = asyncio.get_event_loop()
     context = ""

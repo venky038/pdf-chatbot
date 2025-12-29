@@ -1,179 +1,197 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
+
 :root {
-    --bg-color: #0f172a; /* Matches Sidebar */
-    --card-bg: #ffffff;
-    --text-primary: #1e293b;
-    --text-secondary: #64748b;
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
-    --gradient: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
-    --error: #ef4444;
-    --success: #10b981;
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+}
+
+.dark-mode {
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --bg: #020617;
+    --card: #0f172a;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --border: #1e293b;
 }
 
 * {
+    margin: 0;
+    padding: 0;
     box-sizing: border-box;
 }
 
 body {
-    margin: 0;
     font-family: 'Inter', sans-serif;
-    background-color: var(--bg-color);
+    background: var(--bg);
+    color: var(--text);
     height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
-    color: var(--text-primary);
-    overflow: hidden;
+    transition: all 0.4s ease;
 }
 
-/* Subtle background effect */
 .background-mesh {
-    position: absolute;
+    position: fixed;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100%;
-    background: 
-        radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 25%),
-        radial-gradient(circle at 85% 30%, rgba(79, 70, 229, 0.15), transparent 25%);
-    z-index: 0;
+    background:
+        radial-gradient(circle at 10% 20%, rgba(79, 70, 229, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 90% 80%, rgba(99, 102, 241, 0.05) 0%, transparent 50%);
+    z-index: -1;
 }
 
 .auth-card {
-    background: var(--card-bg);
+    background: var(--card);
     width: 100%;
-    max-width: 400px;
-    padding: 2.5rem;
-    border-radius: 24px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-    position: relative;
-    z-index: 1;
-    margin: 1rem;
-    transition: transform 0.3s ease;
+    max-width: 440px;
+    padding: 3.5rem;
+    border-radius: 32px;
+    border: 1px solid var(--border);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2);
+    animation: slideUp 0.5s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .brand-header {
     text-align: center;
-    margin-bottom: 2rem;
+    margin-bottom: 3rem;
 }
 
 .logo-icon {
-    font-size: 3rem;
-    margin-bottom: 0.5rem;
-    filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+    font-size: 3.5rem;
+    margin-bottom: 1rem;
+    display: inline-block;
 }
 
 .brand-header h1 {
-    font-size: 1.5rem;
-    font-weight: 700;
-    margin: 0;
-    background: var(--gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.25rem;
+    font-weight: 800;
+    color: var(--primary);
+    letter-spacing: -1px;
 }
 
 .brand-header p {
-    color: var(--text-secondary);
+    color: var(--text-muted);
+    font-size: 1rem;
     margin-top: 0.5rem;
-    font-size: 0.9rem;
 }
 
-/* Form Styling */
+.input-group {
+    margin-bottom: 1.5rem;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.input-group input {
+    width: 100%;
+    padding: 14px 20px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 1rem;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.input-group input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+}
+
+.auth-btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-top: 1rem;
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.auth-btn:hover {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(79, 70, 229, 0.4);
+}
+
+.auth-btn.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    box-shadow: none;
+}
+
+.auth-btn.secondary:hover {
+    background: var(--bg);
+    transform: translateY(-1px);
+}
+
+.toggle-text {
+    text-align: center;
+    margin-top: 2.5rem;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+}
+
+.toggle-text span {
+    color: var(--primary);
+    font-weight: 700;
+    cursor: pointer;
+    margin-left: 6px;
+}
+
+.status-msg {
+    font-size: 0.9rem;
+    text-align: center;
+    margin: 1rem 0;
+    font-weight: 600;
+}
+
+.status-msg.error {
+    color: #ef4444;
+}
+
+.status-msg.success {
+    color: #10b981;
+}
+
 .form-section {
     display: none;
-    animation: fadeIn 0.3s ease;
 }
 
 .form-section.active {
     display: block;
 }
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.input-group {
-    margin-bottom: 1.25rem;
-    text-align: left;
-}
-
-.input-group label {
-    display: block;
-    font-size: 0.85rem;
-    font-weight: 500;
-    margin-bottom: 0.5rem;
-    color: var(--text-secondary);
-}
-
-.input-group input {
-    width: 100%;
-    padding: 12px 16px;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    font-size: 0.95rem;
-    font-family: inherit;
-    transition: all 0.2s;
-    outline: none;
-    background: #f8fafc;
-}
-
-.input-group input:focus {
-    border-color: var(--accent);
-    background: white;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.auth-btn {
-    width: 100%;
-    padding: 12px;
-    background: var(--gradient);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.1s, opacity 0.2s;
-    margin-top: 0.5rem;
-}
-
-.auth-btn:hover {
-    opacity: 0.9;
-}
-
-.auth-btn:active {
-    transform: scale(0.98);
-}
-
-.auth-btn.secondary {
-    background: #1e293b; 
-}
-
-/* Toggle Text */
-.toggle-text {
-    text-align: center;
-    margin-top: 1.5rem;
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-}
-
-.toggle-text span {
-    color: var(--accent);
-    font-weight: 600;
-    cursor: pointer;
-    margin-left: 4px;
-}
-
-.toggle-text span:hover {
-    text-decoration: underline;
-}
-
-/* Messages */
-.status-msg {
-    font-size: 0.85rem;
-    text-align: center;
-    min-height: 1.2em;
-    margin: 0.5rem 0;
-}
-
-.status-msg.error { color: var(--error); }
-.status-msg.success { color: var(--success); }

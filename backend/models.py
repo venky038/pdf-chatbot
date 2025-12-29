@@ -12,9 +12,7 @@ PROJECT_ROOT = os.path.dirname(APP_ROOT)
 DB_PATH = os.path.join(PROJECT_ROOT, "chat_app.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-Base = declarative_base()
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from database import Base
 
 class User(Base):
     __tablename__ = "users"
