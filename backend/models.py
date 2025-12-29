@@ -23,7 +23,6 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
 
-# --- THIS IS THE UPDATED CLASS ---
 class Conversation(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
@@ -32,13 +31,18 @@ class Conversation(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     
     # Vector store ID (shared for all PDFs in this conversation)
-    vector_store_id = Column(String, unique=True, nullable=False) 
+    # nullable=True allows for General Chats (Pure LLM mode)
+    vector_store_id = Column(String, unique=True, nullable=True) 
     
     # Store file hashes as JSON: {"filename": "hash", ...}
     file_hashes = Column(String, default="{}", nullable=False)
     
+    # Soft delete flag: 0 = active, 1 = deleted (hidden from UI)
+    is_deleted = Column(Integer, default=0)
+    
     user = relationship("User", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+    tags = relationship("ConversationTag", back_populates="conversation", cascade="all, delete-orphan")
     
     def get_file_hashes(self):
         """Parse file hashes JSON"""
@@ -83,9 +87,6 @@ class ConversationTag(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     conversation = relationship("Conversation", back_populates="tags")
-
-# Add relationship to Conversation model
-Conversation.tags = relationship("ConversationTag", back_populates="conversation", cascade="all, delete-orphan")
 
 class PublicShare(Base):
     """Shareable conversation links"""

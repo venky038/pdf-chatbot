@@ -22,6 +22,7 @@ const exportModal = document.getElementById("exportModal");
 const summaryContent = document.getElementById("summaryContent");
 const closeModalBtn = document.getElementById("closeModalBtn");
 const downloadSummaryBtn = document.getElementById("downloadSummaryBtn");
+const themeIcon = document.getElementById("themeIcon"); // Make sure your button has this ID inside
 
 // === UTILITIES ===
 function showToast(message, duration = 3000) {
@@ -58,10 +59,16 @@ function toggleDarkMode() {
 }
 
 function applyDarkMode() {
+    // This targets the root element to switch CSS variables globally
     if (darkMode) {
         document.documentElement.classList.add("dark-mode");
+        // Update button icon if it exists
+        const btn = document.querySelector('.sidebar-btn[title="Dark Mode"]');
+        if(btn) btn.textContent = "☀️"; 
     } else {
         document.documentElement.classList.remove("dark-mode");
+        const btn = document.querySelector('.sidebar-btn[title="Dark Mode"]');
+        if(btn) btn.textContent = "🌙";
     }
 }
 
@@ -252,14 +259,9 @@ async function loadConversationTags(conversationId) {
         if (res.ok) {
             const data = await res.json();
             const tagsContainer = document.getElementById("conversationTags");
-            if (tagsContainer) {
-                tagsContainer.innerHTML = data.tags.map(tag => `
-                    <span class="tag">
-                        ${tag}
-                        <button class="tag-remove" onclick="removeTag(${conversationId}, '${tag}')">×</button>
-                    </span>
-                `).join("");
-            }
+            // NOTE: You need a container in index.html to show tags. 
+            // If not present, this part gracefully does nothing visible in list, 
+            // but in a real app you'd append this to chat header or list item.
         }
     } catch (e) {
         console.error("Failed to load tags:", e);
@@ -327,7 +329,6 @@ function toggleConversationSelection(conversationId) {
         selectedConversations.add(conversationId);
     }
     
-    // Update UI to show selected count
     const count = selectedConversations.size;
     if (count > 0) {
         showToast(`${count} conversation(s) selected`);
@@ -541,7 +542,6 @@ function copyMessageToClipboard(content) {
         showToast("✅ Copied to clipboard!");
     }).catch(err => {
         console.error("Copy failed:", err);
-        // Fallback for older browsers
         const textArea = document.createElement("textarea");
         textArea.value = content;
         document.body.appendChild(textArea);
@@ -821,10 +821,10 @@ async function loadChat(id) {
             headers: { "Authorization": `Bearer ${token}` } 
         });
         
-        if (!res.ok) throw new Error("Failed to load chat");
+        if (!res.ok) throw new Error("Failed to load chat (" + res.status + ")");
         const data = await res.json();
         
-        currentVectorStoreId = data.vector_store_id;
+        currentVectorStoreId = data.vector_store_id; // Handles null fine in JS
         document.getElementById("chatTitle").textContent = data.title;
         
         chatBox.innerHTML = "";
@@ -838,8 +838,11 @@ async function loadChat(id) {
             renderTextWithCitations(content, m.content);
         });
         
+        // --- SUCCESS: ENABLE INPUTS ---
         userInput.disabled = false;
         document.getElementById("sendBtn").disabled = false;
+        userInput.focus();
+        
         summaryBtn.style.display = "block";
         exportBtn.style.display = "block";
         
@@ -848,6 +851,7 @@ async function loadChat(id) {
         
     } catch (e) {
         showToast("Failed to load chat: " + e.message);
+        console.error(e);
     }
 }
 
@@ -892,7 +896,7 @@ async function loadConversations(page = 0) {
             // Add context menu (right-click)
             div.addEventListener("contextmenu", (e) => {
                 e.preventDefault();
-                showContextMenu(e, c.id);
+                showConversationContextMenu(e, c.id);
             });
             
             div.onclick = () => loadChat(c.id);
@@ -916,24 +920,43 @@ async function loadConversations(page = 0) {
     }
 }
 
-function showContextMenu(event, conversationId) {
+function showConversationContextMenu(event, conversationId) {
+    // Remove existing if any
+    const existing = document.querySelector('.context-menu');
+    if (existing) existing.remove();
+
     const menu = document.createElement("div");
     menu.className = "context-menu";
     menu.style.left = event.clientX + "px";
     menu.style.top = event.clientY + "px";
     menu.innerHTML = `
-        <button onclick="showConversationStats()">📊 Stats</button>
+        <button onclick="showConversationStatsFromMenu(${conversationId})">📊 Stats</button>
         <button onclick="addTagPrompt(${conversationId})">🏷️ Add Tag</button>
-        <button onclick="createShareLink()">🔗 Share</button>
+        <button onclick="createShareLinkFromMenu(${conversationId})">🔗 Share</button>
         <button onclick="deleteConversation(${conversationId})">🗑️ Delete</button>
+        <button onclick="permanentlyDeleteConversation(${conversationId})" style="color: #ef4444; font-weight: bold;">🔥 Delete Permanently</button>
     `;
     
     document.body.appendChild(menu);
-    document.addEventListener("click", () => menu.remove(), { once: true });
+    
+    // Close on click outside
+    setTimeout(() => {
+        document.addEventListener("click", () => menu.remove(), { once: true });
+    }, 0);
+}
+
+// Wrapper functions for context menu (since they need ID but context isn't set)
+function showConversationStatsFromMenu(id) {
+    currentConversationId = id; // Temp set for the function
+    showConversationStats();
+}
+function createShareLinkFromMenu(id) {
+    currentConversationId = id;
+    createShareLink();
 }
 
 async function deleteConversation(id) {
-    if (!confirm("Delete this conversation?")) return;
+    if (!confirm("Delete this conversation? (You can restore it from settings later)")) return;
     
     try {
         const res = await fetch(`${API_BASE}/conversations/${id}`, {
@@ -942,9 +965,41 @@ async function deleteConversation(id) {
         });
         
         if (res.ok) {
-            showToast("✅ Conversation deleted");
-            if (currentConversationId === id) currentConversationId = null;
+            showToast("✅ Conversation deleted (soft delete - can be restored)");
+            if (currentConversationId === id) {
+                currentConversationId = null;
+                chatBox.innerHTML = `<div class="message bot"><div class="msg-content">Select a chat to begin.</div></div>`;
+                userInput.disabled = true;
+                document.getElementById("sendBtn").disabled = true;
+            }
             loadConversations();
+        }
+    } catch (e) {
+        showToast("Failed to delete: " + e.message);
+    }
+}
+
+async function permanentlyDeleteConversation(id) {
+    if (!confirm("PERMANENTLY DELETE this conversation and all embeddings? This cannot be undone!")) return;
+    if (!confirm("Are you absolutely sure? This will remove all data permanently.")) return;
+    
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${id}/permanently`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        
+        if (res.ok) {
+            showToast("🔥 Conversation permanently deleted with all embeddings");
+            if (currentConversationId === id) {
+                currentConversationId = null;
+                chatBox.innerHTML = `<div class="message bot"><div class="msg-content">Select a chat to begin.</div></div>`;
+                userInput.disabled = true;
+                document.getElementById("sendBtn").disabled = true;
+            }
+            loadConversations();
+        } else {
+            showToast("Failed to permanently delete conversation");
         }
     } catch (e) {
         showToast("Failed to delete: " + e.message);
@@ -998,14 +1053,42 @@ document.getElementById("pdfInput").addEventListener("change", async (e) => {
 });
 
 // New chat button
-document.getElementById("newChatBtn").onclick = () => {
-    currentConversationId = null;
-    chatBox.innerHTML = `<div class="message bot"><div class="msg-content">Select or upload a PDF to start chatting!</div></div>`;
-    document.getElementById("chatTitle").textContent = "New Chat";
-    userInput.disabled = true;
-    document.getElementById("sendBtn").disabled = true;
-    summaryBtn.style.display = "none";
-    exportBtn.style.display = "none";
+document.getElementById("newChatBtn").onclick = async () => {
+    // Create a new conversation without requiring a PDF first
+    try {
+        const res = await fetch(`${API_BASE}/conversations`, {
+            method: "POST",
+            headers: { 
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ title: "New Chat", vector_store_id: null })
+        });
+        
+        if (res.ok) {
+            const data = await res.json();
+            currentConversationId = data.id;
+            
+            // --- UI RESET FOR NEW CHAT ---
+            chatBox.innerHTML = `<div class="message bot"><div class="msg-content">👋 Welcome to General Chat!<br><br>You can ask me questions without uploading a PDF. For better accuracy, you can upload PDFs anytime.<br><br>⚠️ Note: Answers are based on general knowledge when no PDFs are loaded.</div></div>`;
+            document.getElementById("chatTitle").textContent = "New Chat";
+            
+            userInput.disabled = false;
+            document.getElementById("sendBtn").disabled = false;
+            userInput.focus();
+            
+            summaryBtn.style.display = "block";
+            exportBtn.style.display = "block";
+            
+            showToast("✅ New general chat started!");
+            loadConversations();
+        } else {
+            showToast("Failed to create new chat (" + res.status + ")");
+        }
+    } catch (e) {
+        showToast("Error creating chat: " + e.message);
+        console.error(e);
+    }
 };
 
 // Send button handler

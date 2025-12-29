@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <title>Pro Chat RAG</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocuMind AI</title>
     <link rel="stylesheet" href="style.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -14,19 +15,30 @@
     
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="brand">📄 DocuMind AI</div>
+            <div class="brand">
+                <span>📄</span> DocuMind AI
+            </div>
             <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
             <div class="search-bar">
                 <input type="text" id="searchInput" placeholder="🔍 Search..." onkeyup="searchConversations(this.value)" />
             </div>
         </div>
-        <div class="chat-list" id="conversationList"></div>
+        
+        <div class="chat-list" id="conversationList">
+            </div>
+        
         <div class="sidebar-controls">
-            <button class="sidebar-btn" title="Dark Mode" onclick="toggleDarkMode()">🌙</button>
+            <button class="sidebar-btn" title="Dark Mode" onclick="toggleDarkMode()">
+                <span id="themeIcon">🌙</span>
+            </button>
             <button class="sidebar-btn" title="Statistics" onclick="loadUserStats()">📊</button>
         </div>
+        
         <div class="user-profile">
-            <span id="usernameDisplay">User</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <div style="width:24px; height:24px; background:var(--primary); border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:12px;">👤</div>
+                <span id="usernameDisplay">User</span>
+            </div>
             <button class="logout-link" id="logoutBtn">Sign Out</button>
         </div>
     </aside>
@@ -93,7 +105,7 @@
             <button class="close-modal" id="closeExportModalBtn">&times;</button>
         </div>
         <div class="modal-body" style="text-align: center; padding: 2rem;">
-            <p style="margin-bottom: 1.5rem; color: #666;">Choose export format:</p>
+            <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Choose export format:</p>
             <button class="btn-action" id="exportPdfBtn" style="margin: 0.5rem; width: 150px;">📄 PDF</button>
             <button class="btn-action" id="exportHtmlBtn" style="margin: 0.5rem; width: 150px;">🌐 HTML</button>
             <button class="btn-action" id="exportJsonBtn" style="margin: 0.5rem; width: 150px;">📋 JSON</button>

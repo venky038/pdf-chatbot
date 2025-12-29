@@ -71,14 +71,20 @@ class UserInfo(BaseModel):
 class ConversationInfo(BaseModel):
     id: int
     title: str
+    created_at: Optional[datetime] = None
+    vector_store_id: Optional[str] = None
+
 class MessageInfo(BaseModel):
     id: int  # Add message ID for feedback/ratings
     role: str
     content: str
+
+# --- FIX: Made vector_store_id Optional to prevent 500 errors on General Chats ---
 class ConversationHistory(BaseModel):
     title: str
-    vector_store_id: str
+    vector_store_id: Optional[str] = None 
     messages: List[MessageInfo]
+
 class SummaryResponse(BaseModel):
     generated_summary: str
     messages: List[MessageInfo]
@@ -187,7 +193,11 @@ async def upload_pdf(
     if conversation_id:
         conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
         if conversation:
-            vector_store_id = conversation.vector_store_id
+            vector_store_id = conversation.vector_store_id if conversation.vector_store_id else str(uuid.uuid4())
+            # If converting a general chat to a RAG chat, save the new ID
+            if not conversation.vector_store_id:
+                conversation.vector_store_id = vector_store_id
+                
             existing_pdfs = conversation.get_file_hashes()
             
             # Check if the same file was already uploaded to this conversation
@@ -214,7 +224,7 @@ async def upload_pdf(
             await f.write(file_content)
         
         logger.info(f"  ✅ File saved to disk. Starting RAG processing...")
-        await rag_logic.process_pdf_for_rag(file_path, vector_store_id, is_append=is_append)
+        await rag_logic.process_pdf_for_rag(file_path, vector_store_id, is_append=is_append, user_id=current_user.id)
 
         if not conversation:
             # Create new conversation with first PDF
@@ -264,6 +274,11 @@ async def ask_question_streaming(data: dict, db: Session = Depends(get_db), curr
 
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation: raise HTTPException(404)
+    
+    # Verify user owns this conversation
+    if conversation.user_id != current_user.id:
+        logger.warning(f"❌ Unauthorized access attempt | User: {current_user.id} | Conversation: {conversation_id}")
+        raise HTTPException(403, "Unauthorized access to this conversation")
 
     db.add(Message(role="user", content=question, conversation_id=conversation_id))
     db.commit()
@@ -274,7 +289,7 @@ async def ask_question_streaming(data: dict, db: Session = Depends(get_db), curr
         full_answer = ""
         try:
             logger.info("  ➡ Starting response stream...")
-            async for chunk in rag_logic.answer_question_stream(question, conversation.vector_store_id, history):
+            async for chunk in rag_logic.answer_question_stream(question, conversation.vector_store_id, history, current_user.id):
                 full_answer += chunk
                 yield chunk
             
@@ -292,6 +307,9 @@ async def ask_question_streaming(data: dict, db: Session = Depends(get_db), curr
 @app.get("/preview/{vector_store_id}/{page_num}")
 async def get_page_preview(vector_store_id: str, page_num: int, current_user: User = Depends(get_current_user)):
     logger.info(f"👀 Preview Request | Store: {vector_store_id} | Page: {page_num}")
+    if vector_store_id == "null" or not vector_store_id:
+        return {"text": "No document associated with this chat."}
+
     target_file = None
     for f in os.listdir(UPLOAD_DIR):
         if f.startswith(vector_store_id):
@@ -300,7 +318,7 @@ async def get_page_preview(vector_store_id: str, page_num: int, current_user: Us
             
     if not target_file: 
         logger.error("❌ Source file for preview not found.")
-        raise HTTPException(404)
+        raise HTTPException(404, detail="File not found")
 
     try:
         doc = fitz.open(target_file)
@@ -314,7 +332,44 @@ async def get_page_preview(vector_store_id: str, page_num: int, current_user: Us
 # --- HISTORY ---
 @app.get("/conversations", response_model=List[ConversationInfo])
 async def get_convos(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Conversation).filter(Conversation.user_id == current_user.id).order_by(Conversation.created_at.desc()).all()
+    conversations = db.query(Conversation).filter(
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == 0
+    ).order_by(Conversation.created_at.desc()).all()
+    return [
+        ConversationInfo(
+            id=c.id,
+            title=c.title,
+            created_at=c.created_at,
+            vector_store_id=c.vector_store_id
+        )
+        for c in conversations
+    ]
+
+@app.post("/conversations")
+async def create_conversation(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Create a new conversation (with optional PDF)"""
+    title = data.get("title", "New Chat")
+    vector_store_id = data.get("vector_store_id")  # Can be None for general chat
+    
+    convo = Conversation(
+        title=title,
+        user_id=current_user.id,
+        vector_store_id=vector_store_id,
+        is_deleted=0
+    )
+    db.add(convo)
+    db.commit()
+    db.refresh(convo)
+    
+    logger.info(f"✅ New Conversation Created | ID: {convo.id} | User: {current_user.username} | Mode: {'General Chat' if not vector_store_id else 'RAG'}")
+    
+    return {
+        "id": convo.id,
+        "title": convo.title,
+        "created_at": convo.created_at,
+        "vector_store_id": convo.vector_store_id
+    }
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationHistory)
 async def get_history(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -681,10 +736,35 @@ async def get_user_stats_dashboard(db: Session = Depends(get_db), current_user: 
 
 @app.delete("/conversations/{conversation_id}", status_code=204)
 async def delete_convo(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    logger.info(f"🗑️ Deleting Conversation {conversation_id} for user {current_user.username}")
+    """Soft delete - hides conversation from UI"""
+    logger.info(f"🗑️ Soft Deleting Conversation {conversation_id} for user {current_user.username}")
     c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
     if c:
+        c.is_deleted = 1
+        db.commit()
+        return Response(status_code=204)
+    raise HTTPException(404)
+
+@app.delete("/conversations/{conversation_id}/permanently", status_code=204)
+async def permanently_delete_convo(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Hard delete - removes conversation and all embeddings from disk"""
+    logger.info(f"🗑️ Permanently Deleting Conversation {conversation_id} for user {current_user.username}")
+    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
+    if c:
+        # Delete embeddings from disk if vector_store_id exists
+        if c.vector_store_id:
+            vector_store_path = os.path.join(VECTOR_STORE_DIR, c.vector_store_id)
+            if os.path.exists(vector_store_path):
+                try:
+                    import shutil
+                    shutil.rmtree(vector_store_path)
+                    logger.info(f"  ✅ Removed embeddings folder: {vector_store_path}")
+                except Exception as e:
+                    logger.error(f"  ⚠️ Failed to remove embeddings: {e}")
+        
+        # Delete conversation record from database (cascade deletes messages and feedback)
         db.delete(c)
         db.commit()
+        logger.info(f"  ✅ Removed conversation record from database")
         return Response(status_code=204)
     raise HTTPException(404)

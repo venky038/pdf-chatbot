@@ -58,6 +58,24 @@ except Exception as e:
 
 class NoSearchableTextError(Exception): pass
 
+# --- GLOBAL VECTOR STORE MANAGEMENT ---
+def get_global_vector_store_path(user_id: int) -> str:
+    """Get path to user's global vector store"""
+    return os.path.join(VECTOR_STORE_DIR, f"user_{user_id}_global")
+
+def check_global_store_exists(user_id: int) -> bool:
+    """Check if user has a global vector store"""
+    global_path = get_global_vector_store_path(user_id)
+    bm25_path = os.path.join(VECTOR_STORE_DIR, f"user_{user_id}_global_bm25.pkl")
+    
+    # Check if both FAISS and BM25 files exist
+    faiss_exists = os.path.exists(os.path.join(global_path, "index.faiss"))
+    bm25_exists = os.path.exists(bm25_path)
+    
+    result = faiss_exists and bm25_exists
+    logger.debug(f"🔍 Global store check for user {user_id}: FAISS={faiss_exists}, BM25={bm25_exists}, Result={result}")
+    return result
+
 # --- HELPER FUNCTIONS ---
 def _normalize_messages(system_prompt, history, new_user_content):
     final_messages = [{"role": "system", "content": system_prompt}]
@@ -119,7 +137,7 @@ def load_pdf_hybrid_local(pdf_path: str):
         logger.error(f"❌ Hybrid Load Error: {e}")
     return documents
 
-def _process_and_save_sync(pdf_path, vector_store_id, is_append=False):
+def _process_and_save_sync(pdf_path, vector_store_id, is_append=False, user_id=None):
     # DIRECT LOCAL PROCESSING - LLAMAPARSE REMOVED
     documents = load_pdf_hybrid_local(pdf_path)
         
@@ -147,12 +165,65 @@ def _process_and_save_sync(pdf_path, vector_store_id, is_append=False):
             
     bm25 = BM25Okapi([c.page_content.lower().split() for c in all_chunks])
     with open(bm25_path, "wb") as f: pickle.dump({"bm25": bm25, "chunks": all_chunks}, f)
+    
+    # ALSO SAVE TO GLOBAL STORE (if user_id provided)
+    if user_id:
+        _save_to_global_store_sync(chunks, user_id)
         
     return f"Processed {len(documents)} pages."
 
-async def process_pdf_for_rag(pdf_path, vector_store_id, is_append=False):
+def _save_to_global_store_sync(chunks, user_id: int):
+    """Save chunks to user's global vector store with error handling"""
+    if not chunks:
+        logger.warning(f"No chunks to save for user {user_id}")
+        return
+        
+    global_path = get_global_vector_store_path(user_id)
+    global_bm25_path = os.path.join(VECTOR_STORE_DIR, f"user_{user_id}_global_bm25.pkl")
+    
+    try:
+        # Ensure directory exists
+        os.makedirs(global_path, exist_ok=True)
+        
+        # Save FAISS to global
+        faiss_index_path = os.path.join(global_path, "index.faiss")
+        try:
+            if os.path.exists(faiss_index_path):
+                # Merge with existing
+                existing = FAISS.load_local(global_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
+                existing.merge_from(FAISS.from_documents(chunks, EMBEDDINGS_MODEL))
+                existing.save_local(global_path)
+                logger.info(f"✅ Merged PDFs to user {user_id}'s global vector store")
+            else:
+                # Create new
+                FAISS.from_documents(chunks, EMBEDDINGS_MODEL).save_local(global_path)
+                logger.info(f"✅ Created user {user_id}'s global vector store")
+        except Exception as e:
+            logger.error(f"❌ Error saving FAISS for user {user_id}: {e}")
+            raise
+        
+        # Save BM25 to global
+        try:
+            all_chunks = chunks
+            if os.path.exists(global_bm25_path):
+                with open(global_bm25_path, "rb") as f:
+                    all_chunks = pickle.load(f)["chunks"] + chunks
+                
+            bm25 = BM25Okapi([c.page_content.lower().split() for c in all_chunks])
+            with open(global_bm25_path, "wb") as f:
+                pickle.dump({"bm25": bm25, "chunks": all_chunks}, f)
+            logger.info(f"✅ Saved BM25 index for user {user_id} ({len(all_chunks)} total chunks)")
+        except Exception as e:
+            logger.error(f"❌ Error saving BM25 for user {user_id}: {e}")
+            raise
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to save global store for user {user_id}: {e}")
+        # Don't re-raise - allow chat to continue even if global store fails
+
+async def process_pdf_for_rag(pdf_path, vector_store_id, is_append=False, user_id=None):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _process_and_save_sync, pdf_path, vector_store_id, is_append)
+    return await loop.run_in_executor(None, _process_and_save_sync, pdf_path, vector_store_id, is_append, user_id)
 
 # --- RETRIEVAL & SEARCH (Same as before) ---
 def format_context(docs):
@@ -185,31 +256,118 @@ def _hybrid_search_sync(question, vector_store_id):
     top_docs = [doc for doc, _ in sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)[:8]]
     return format_context(top_docs)
 
-# --- ANSWERING & SUMMARY (Same as before) ---
-async def answer_question_stream(question: str, vector_store_id: str, history: list[dict]) -> AsyncGenerator[str, None]:
-    intent = await classify_intent(question)
-    # PRIVATE MODE: Do not answer general questions - only answer from uploaded PDFs
-    if intent == "chat":
-        yield "I can only answer questions related to your uploaded documents. Please ask about the content in your PDFs."
-        return
+def _hybrid_search_global_sync(question, user_id: int):
+    """Search user's global vector store"""
+    global_path = get_global_vector_store_path(user_id)
+    global_bm25_path = os.path.join(VECTOR_STORE_DIR, f"user_{user_id}_global_bm25.pkl")
+    
+    if not os.path.exists(global_bm25_path): return ""
+    
+    vector_store = FAISS.load_local(global_path, EMBEDDINGS_MODEL, allow_dangerous_deserialization=True)
+    with open(global_bm25_path, "rb") as f: data = pickle.load(f)
+    
+    unique_docs = {d.page_content: d for d in vector_store.similarity_search(question, k=20)}
+    for d in data["bm25"].get_top_n(question.lower().split(), data["chunks"], n=20): unique_docs[d.page_content] = d
+    
+    candidates = list(unique_docs.values())
+    if not candidates: return ""
+    
+    scores = RERANKER.predict([[question, d.page_content] for d in candidates])
+    top_docs = [doc for doc, _ in sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)[:8]]
+    return format_context(top_docs)
+
+def _get_global_context_from_store_sync(user_id: int):
+    """Get global context for summary from user's global store"""
+    global_bm25_path = os.path.join(VECTOR_STORE_DIR, f"user_{user_id}_global_bm25.pkl")
+    if not os.path.exists(global_bm25_path): return ""
+    
+    with open(global_bm25_path, "rb") as f: chunks = pickle.load(f)["chunks"]
+    indices = np.linspace(0, len(chunks)-1, num=min(40, len(chunks)), dtype=int)
+    return format_context([chunks[i] for i in indices])
+
+# --- ANSWERING & SUMMARY ---
+async def answer_question_stream(question: str, vector_store_id: str, history: list[dict], user_id: int = None) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
-    context = ""
-    try:
-        if intent == "summary":
-            context = await loop.run_in_executor(None, _get_global_context_sync, vector_store_id)
-            system_prompt = "You are an expert analyst. Summarize the document content. Always cite pages using the format [Page X]. IMPORTANT: Only answer based on the provided document context."
+    
+    # GENERAL CHAT MODE - No PDF loaded in this specific chat
+    if not vector_store_id or vector_store_id == "null":
+        # OPTION 1: Check if user has global vector store (previous PDFs)
+        if user_id and check_global_store_exists(user_id):
+            logger.info(f"📚 Using global vector store for user {user_id}")
+            context = await loop.run_in_executor(None, _hybrid_search_global_sync, question, user_id)
+            
+            # STRICT RAG: Only answer if context is found
+            if context:
+                system_prompt = (
+                    "You are a helpful assistant. Answer questions based on the Context provided below from the user's uploaded documents.\n"
+                    "1. Cite pages using the format [Page X] if the answer is in the context.\n"
+                    "2. If the answer is not in the context, answer generally using your own knowledge."
+                )
+                messages = _normalize_messages(system_prompt, history, f"CONTEXT:\n{context}\n\nUSER QUESTION: {question}")
+            else:
+                # Fallback: User has docs, but this query isn't about them
+                # Since you requested "not pure general llm", we indicate no info found in docs.
+                logger.info(f"🌐 Global search empty - No matching info in docs")
+                yield "❌ I couldn't find any relevant information in your uploaded documents regarding this query."
+                return
+        
+        # OPTION 2: Pure LLM Mode (No PDFs ever uploaded)
         else:
-            context = await loop.run_in_executor(None, _hybrid_search_sync, question, vector_store_id)
-            system_prompt = (
-                "You are a helpful assistant. Answer the user's question based ONLY on the Context below.\n"
-                "1. CRITICAL: You MUST cite pages using the exact format: [Page X].\n"
-                "2. If the answer is missing, say 'I cannot find this information'.\n"
-                "3. IMPORTANT: Do NOT answer questions about topics not covered in the provided context."
-            )
-        if not context:
-            yield "I cannot find relevant information in the uploaded document. Please check if the document contains information related to your question."
-            return
+            logger.info(f"🌐 General Chat Mode (No Context) for user {user_id}")
+            system_prompt = "You are a helpful assistant. Answer the user's questions clearly and concisely."
+            messages = _normalize_messages(system_prompt, history, question)
+        
+        # --- SEND REQUEST ---
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream("POST", "https://api.perplexity.ai/chat/completions", 
+                                         headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}, 
+                                         json={"model": "sonar-pro", "messages": messages, "stream": True}) as response:
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                chunk = json.loads(line[6:])
+                                content = chunk["choices"][0]["delta"].get("content", "")
+                                if content: yield content
+                            except: pass
+        except Exception as e:
+            logger.error(f"Stream Error: {e}")
+            yield "⚠️ Error processing request."
+        return
+    
+    # RAG MODE - Specific PDF loaded in this conversation
+    intent = await classify_intent(question)
+    
+    # If user just says "hi", don't do RAG
+    if intent == "chat":
+        system_prompt = "You are a helpful assistant. Be polite and concise."
+        messages = _normalize_messages(system_prompt, history, question)
+    else:
+        context = ""
+        try:
+            if intent == "summary":
+                context = await loop.run_in_executor(None, _get_global_context_sync, vector_store_id)
+                system_prompt = "You are an expert analyst. Summarize the document content. Always cite pages using the format [Page X]."
+            else:
+                context = await loop.run_in_executor(None, _hybrid_search_sync, question, vector_store_id)
+                system_prompt = (
+                    "You are a helpful assistant. Answer the user's question based ONLY on the Context below.\n"
+                    "1. CRITICAL: You MUST cite pages using the exact format: [Page X].\n"
+                    "2. If the answer is missing, say 'I cannot find this information'.\n"
+                )
+        except Exception as e:
+             logger.error(f"Context retrieval failed: {e}")
+             context = ""
+
+        if not context and intent != "chat":
+             # Fallback if context is empty but intent was RAG
+             yield "I cannot find relevant information in the uploaded document."
+             return
+             
         messages = _normalize_messages(system_prompt, history, f"CONTEXT:\n{context}\n\nUSER QUESTION: {question}")
+
+    # Stream Response
+    try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream("POST", "https://api.perplexity.ai/chat/completions", 
                                      headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}, 
@@ -226,9 +384,10 @@ async def answer_question_stream(question: str, vector_store_id: str, history: l
         yield "⚠️ Error processing request."
 
 async def generate_summary(transcript: str):
+    """Generate a simple, concise bullet-point summary"""
     messages = [
-        {"role": "system", "content": "You are a helpful assistant. Provide a concise, professional summary of the document content and conversation."},
-        {"role": "user", "content": f"Summarize the following conversation and document content:\n\n{transcript[:15000]}"}
+        {"role": "system", "content": "You are a helpful assistant. Generate a simple, concise summary of the conversation and document content. Return 5-7 bullet points covering main topics discussed. Be brief - maximum 1-2 lines per bullet point."},
+        {"role": "user", "content": f"Summarize this conversation in 5-7 bullet points:\n\n{transcript[:15000]}"}
     ]
     url = "https://api.perplexity.ai/chat/completions"
     payload = {"model": "sonar-pro", "messages": messages, "stream": False}
