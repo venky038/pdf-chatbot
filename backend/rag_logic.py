@@ -188,24 +188,26 @@ def _hybrid_search_sync(question, vector_store_id):
 # --- ANSWERING & SUMMARY (Same as before) ---
 async def answer_question_stream(question: str, vector_store_id: str, history: list[dict]) -> AsyncGenerator[str, None]:
     intent = await classify_intent(question)
+    # PRIVATE MODE: Do not answer general questions - only answer from uploaded PDFs
     if intent == "chat":
-        yield "Hello! How can I help you with your documents today?"
+        yield "I can only answer questions related to your uploaded documents. Please ask about the content in your PDFs."
         return
     loop = asyncio.get_event_loop()
     context = ""
     try:
         if intent == "summary":
             context = await loop.run_in_executor(None, _get_global_context_sync, vector_store_id)
-            system_prompt = "You are an expert analyst. Summarize the document content. Always cite pages using the format [Page X]."
+            system_prompt = "You are an expert analyst. Summarize the document content. Always cite pages using the format [Page X]. IMPORTANT: Only answer based on the provided document context."
         else:
             context = await loop.run_in_executor(None, _hybrid_search_sync, question, vector_store_id)
             system_prompt = (
                 "You are a helpful assistant. Answer the user's question based ONLY on the Context below.\n"
                 "1. CRITICAL: You MUST cite pages using the exact format: [Page X].\n"
-                "2. If the answer is missing, say 'I cannot find this information'."
+                "2. If the answer is missing, say 'I cannot find this information'.\n"
+                "3. IMPORTANT: Do NOT answer questions about topics not covered in the provided context."
             )
         if not context:
-            yield "I cannot find relevant information in the document."
+            yield "I cannot find relevant information in the uploaded document. Please check if the document contains information related to your question."
             return
         messages = _normalize_messages(system_prompt, history, f"CONTEXT:\n{context}\n\nUSER QUESTION: {question}")
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -225,8 +227,8 @@ async def answer_question_stream(question: str, vector_store_id: str, history: l
 
 async def generate_summary(transcript: str):
     messages = [
-        {"role": "system", "content": "You are a helpful assistant. Provide a concise, professional summary of the document content."},
-        {"role": "user", "content": f"Summarize:\n\n{transcript[:15000]}"}
+        {"role": "system", "content": "You are a helpful assistant. Provide a concise, professional summary of the document content and conversation."},
+        {"role": "user", "content": f"Summarize the following conversation and document content:\n\n{transcript[:15000]}"}
     ]
     url = "https://api.perplexity.ai/chat/completions"
     payload = {"model": "sonar-pro", "messages": messages, "stream": False}
@@ -238,3 +240,26 @@ async def generate_summary(transcript: str):
                 return response.json()["choices"][0]["message"]["content"]
             else: return "Failed to generate summary."
     except Exception: return "An error occurred during summary."
+
+async def generate_summary_stream(transcript: str) -> AsyncGenerator[str, None]:
+    """Stream summary response for full conversation"""
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Provide a concise, professional summary of the document content and entire conversation."},
+        {"role": "user", "content": f"Summarize the following entire conversation and document content:\n\n{transcript[:15000]}"}
+    ]
+    url = "https://api.perplexity.ai/chat/completions"
+    payload = {"model": "sonar-pro", "messages": messages, "stream": True}
+    headers = {"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as response:
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            chunk = json.loads(line[6:])
+                            content = chunk["choices"][0]["delta"].get("content", "")
+                            if content: yield content
+                        except: pass
+    except Exception as e:
+        logger.error(f"Summary Stream Error: {e}")
+        yield f"⚠️ Error generating summary: {str(e)}"

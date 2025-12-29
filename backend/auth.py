@@ -11,7 +11,7 @@ load_dotenv()
 # You can generate one using: openssl rand -hex 32
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "a_very_bad_default_secret_key_change_me")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days (increased from 1 day)
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
