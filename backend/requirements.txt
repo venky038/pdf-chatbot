@@ -11,6 +11,7 @@ PyMuPDF
 python-multipart
 aiofiles
 pytesseract
+rapidocr-onnxruntime
 Pillow
 sqlalchemy[pydantic-plugin] # <-- NEW for database
 passlib
