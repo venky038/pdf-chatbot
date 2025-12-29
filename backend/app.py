@@ -72,6 +72,7 @@ class ConversationInfo(BaseModel):
     id: int
     title: str
 class MessageInfo(BaseModel):
+    id: int  # Add message ID for feedback/ratings
     role: str
     content: str
 class ConversationHistory(BaseModel):
@@ -320,7 +321,7 @@ async def get_history(conversation_id: int, db: Session = Depends(get_db), curre
     c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
     if not c: raise HTTPException(404)
     msgs = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()
-    return ConversationHistory(title=c.title, vector_store_id=c.vector_store_id, messages=[{"role": m.role, "content": m.content} for m in msgs])
+    return ConversationHistory(title=c.title, vector_store_id=c.vector_store_id, messages=[{"id": m.id, "role": m.role, "content": m.content} for m in msgs])
 
 @app.get("/conversations/{conversation_id}/pdfs")
 async def get_conversation_pdfs(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

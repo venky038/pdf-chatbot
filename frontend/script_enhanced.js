@@ -41,12 +41,10 @@ function showToast(message, duration = 3000) {
 
 function showLoading(text = "Loading...") {
     const loader = document.createElement("div");
-    loader.className = "loading-skeleton";
+    loader.className = "loading-inline";
     loader.innerHTML = `
-        <div class="loader-content">
-            <div class="spinner"></div>
-            <p>${text}</p>
-        </div>
+        <span class="spinner-mini"></span>
+        <span class="loading-text">${text}</span>
     `;
     return loader;
 }
@@ -281,10 +279,11 @@ async function addMessageFeedback(messageId, rating) {
         });
         
         if (res.ok) {
-            showToast(rating > 0 ? "👍 Feedback recorded" : "👎 Feedback recorded");
+            showToast(rating > 0 ? "👍 Thanks for the feedback!" : "👎 Thanks for the feedback!");
         }
     } catch (e) {
         console.error("Failed to add feedback:", e);
+        showToast("❌ Failed to record feedback");
     }
 }
 
@@ -533,8 +532,28 @@ function generateConversationHtml(data) {
 
 // === COPY MESSAGE TO CLIPBOARD ===
 function copyMessageToClipboard(content) {
-    navigator.clipboard.writeText(content);
-    showToast("✅ Copied to clipboard!");
+    if (!content || content.trim() === "") {
+        showToast("⚠️ Nothing to copy");
+        return;
+    }
+    
+    navigator.clipboard.writeText(content).then(() => {
+        showToast("✅ Copied to clipboard!");
+    }).catch(err => {
+        console.error("Copy failed:", err);
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = content;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand("copy");
+            showToast("✅ Copied to clipboard!");
+        } catch (e) {
+            showToast("❌ Copy failed");
+        }
+        document.body.removeChild(textArea);
+    });
 }
 
 // === CHAT LOGIC ===
@@ -720,25 +739,69 @@ function appendMessage(role, text) {
     const content = document.createElement("div");
     content.className = "msg-content";
     
-    // Add copy button for bot messages
+    // Add buttons for bot messages
     if (role === "assistant") {
         const wrapper = document.createElement("div");
-        wrapper.style.position = "relative";
-        wrapper.style.width = "100%";
+        wrapper.className = "msg-wrapper";
         
         content.textContent = text;
+        
+        // Create button container
+        const btnContainer = document.createElement("div");
+        btnContainer.className = "msg-buttons-container";
+        
+        // Copy button
         const copyBtn = document.createElement("button");
         copyBtn.className = "msg-copy-btn";
-        copyBtn.textContent = "📋";
-        copyBtn.title = "Copy message";
-        copyBtn.onclick = () => copyMessageToClipboard(text || "");
-        copyBtn.style.display = "none";
+        copyBtn.textContent = "📋 Copy";
+        copyBtn.title = "Copy message to clipboard";
+        copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            copyMessageToClipboard(text || "");
+        };
         
-        div.addEventListener("mouseenter", () => copyBtn.style.display = "block");
-        div.addEventListener("mouseleave", () => copyBtn.style.display = "none");
+        // Ratings container
+        const ratingsContainer = document.createElement("div");
+        ratingsContainer.className = "msg-ratings";
+        
+        // Get message ID from the database (stored in data attribute)
+        // We'll set this when the message is rendered from history
+        const thumbsUp = document.createElement("button");
+        thumbsUp.className = "msg-rating-btn thumbs-up";
+        thumbsUp.textContent = "👍";
+        thumbsUp.title = "Helpful";
+        thumbsUp.onclick = (e) => {
+            e.stopPropagation();
+            const msgId = div.dataset.messageId;
+            if (msgId) {
+                addMessageFeedback(msgId, 1);
+                thumbsUp.classList.add("active");
+                thumbsDown.classList.remove("active");
+            }
+        };
+        
+        const thumbsDown = document.createElement("button");
+        thumbsDown.className = "msg-rating-btn thumbs-down";
+        thumbsDown.textContent = "👎";
+        thumbsDown.title = "Not helpful";
+        thumbsDown.onclick = (e) => {
+            e.stopPropagation();
+            const msgId = div.dataset.messageId;
+            if (msgId) {
+                addMessageFeedback(msgId, -1);
+                thumbsUp.classList.remove("active");
+                thumbsDown.classList.add("active");
+            }
+        };
+        
+        ratingsContainer.appendChild(thumbsUp);
+        ratingsContainer.appendChild(thumbsDown);
+        
+        btnContainer.appendChild(copyBtn);
+        btnContainer.appendChild(ratingsContainer);
         
         wrapper.appendChild(content);
-        wrapper.appendChild(copyBtn);
+        wrapper.appendChild(btnContainer);
         div.appendChild(wrapper);
     } else {
         content.textContent = text;
@@ -766,8 +829,13 @@ async function loadChat(id) {
         
         chatBox.innerHTML = "";
         data.messages.forEach(m => {
-            const div = appendMessage(m.role, "");
-            renderTextWithCitations(div, m.content);
+            const content = appendMessage(m.role, "");
+            // Find the message div to attach the ID
+            const msgDiv = content.closest(".message");
+            if (msgDiv && m.id) {
+                msgDiv.dataset.messageId = m.id;
+            }
+            renderTextWithCitations(content, m.content);
         });
         
         userInput.disabled = false;
