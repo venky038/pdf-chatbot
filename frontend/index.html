@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DocuMind AI - Intelligent PDF Chat</title>
+    <title>QueryMate - Intelligent Document AI</title>
     <link rel="stylesheet" href="style.css" />
     <link
         href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
@@ -13,17 +13,20 @@
 </head>
 
 <body>
-    <div id="uploadOverlay" class="upload-overlay">
-        <div class="spinner-global"></div>
-        <div class="upload-text" style="margin-top: 2rem; font-weight: 700; font-size: 1.2rem; color: var(--primary);">
-            Processing Documents...</div>
+    <div id="uploadOverlay" class="upload-overlay"
+        style="display: none; background: rgba(0,0,0,0.4); backdrop-filter: none; z-index: 100;">
+        <div class="modal-card" style="max-width: 300px; padding: 1.5rem; text-align: center;">
+            <div class="spinner-mini" style="margin: 0 auto 1rem;"></div>
+            <div id="uploadStatusText" style="font-weight: 600; font-size: 0.9rem; color: var(--text-main);">Processing
+                Documents...</div>
+        </div>
     </div>
 
     <div class="app-layout">
 
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="brand">📄 DocuMind AI</div>
+                <div class="brand">📄 QueryMate</div>
                 <button class="new-chat-btn" id="newChatBtn">
                     <span>+</span> New Conversation
                 </button>
@@ -78,7 +81,8 @@
             <div class="messages-container" id="chatBox">
                 <div class="message bot">
                     <div class="msg-content">
-                        Hello! I'm your AI document assistant. Upload a PDF or image to start analyzing!
+                        Hello! I'm QueryMate, your document research companion. Upload a PDF or image to start
+                        analyzing!
                     </div>
                 </div>
             </div>
