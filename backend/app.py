@@ -1,690 +1,341 @@
-from fastapi import (
-    FastAPI, UploadFile, File, Form, Depends, HTTPException, status, Response
-)
+import os
+import uuid
+import hashlib
+import logging
+import asyncio
+import aiofiles
+import secrets
+from datetime import datetime, timedelta
+from typing import List, Optional
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import List, Optional
-import secrets
-from datetime import datetime, timedelta
-
-import os
-import logging
-import uuid
-import aiofiles
-import shutil
-import fitz 
-import hashlib
 
 import models
+import schemas
 import auth
-import rag_logic
-from models import SessionLocal, engine, User, Conversation, Message, MessageFeedback, ConversationTag, PublicShare, ConversationStats
-from auth import (
-    get_password_hash, verify_password, create_access_token,
-    SECRET_KEY, ALGORITHM
-)
-from jose import JWTError, jwt
+from database import SessionLocal, engine
+from services.auth_service import AuthService
+from services.conversation_service import ConversationService
+from services.message_service import MessageService
+from services.rag_service import RAGService
 
-# --- LOGGING SETUP ---
+# --- LOGGING CONFIGURATION ---
+# We use a dual-logging system: 
+# 1. A physical 'server.log' file for long-term auditing.
+# 2. A 'StreamHandler' for real-time monitoring in your terminal.
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.log")
+
+# Setup formatting and UTF-8 encoding (crucial for Windows terminal compatibility)
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+stream_handler = logging.StreamHandler()
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s",
-    handlers=[
-        logging.FileHandler("server.log", encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[file_handler, stream_handler]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("QueryMate.Main")
+logger.info(f"System Initialized. Logs stored at: {LOG_FILE}")
 
-logger.info("🚀 Starting FastAPI Server Application...")
+# --- APPLICATION SETUP ---
+app = FastAPI(
+    title="QueryMate AI API",
+    description="The core engine for intelligent document research, high-speed vector retrieval, and AI streaming."
+)
 
-# --- App & DB ---
-app = FastAPI()
+# Physically create database tables based on models.py if they don't exist
 models.Base.metadata.create_all(bind=engine)
-logger.info("✅ Database tables checked/created.")
 
-# --- Config ---
-APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(APP_ROOT)
-UPLOAD_DIR = os.path.join(PROJECT_ROOT, "uploads")
-VECTOR_STORE_DIR = os.path.join(PROJECT_ROOT, "vector_stores")
-
+# --- DIRECTORY CONFIGURATION ---
+# We unify storage in the project root to keep the backend folder clean.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+VECTOR_DIR = os.path.join(BASE_DIR, "vector_stores")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-logger.info(f"📂 Directories ready: {UPLOAD_DIR}, {VECTOR_STORE_DIR}")
+os.makedirs(VECTOR_DIR, exist_ok=True)
 
+# Serve the 'uploads' folder as static files so the UI can link directly to PDFs
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# --- Models ---
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-class UserCreate(BaseModel):
-    username: str
-    password: str
-class UserInfo(BaseModel):
-    username: str
-class ConversationInfo(BaseModel):
-    id: int
-    title: str
-class MessageInfo(BaseModel):
-    id: int  # Add message ID for feedback/ratings
-    role: str
-    content: str
-class ConversationHistory(BaseModel):
-    title: str
-    vector_store_id: str
-    messages: List[MessageInfo]
-class SummaryResponse(BaseModel):
-    generated_summary: str
-    messages: List[MessageInfo]
-class ConversationUpdate(BaseModel):
-    title: str
-
-# New models for features
-class TagCreate(BaseModel):
-    tag: str
-
-class MessageFeedbackCreate(BaseModel):
-    rating: int  # 1-5 or 1/-1
-
-class ShareCreateRequest(BaseModel):
-    expires_in_days: Optional[int] = None  # None = never expires
-
-class BatchDeleteRequest(BaseModel):
-    conversation_ids: List[int]
-
-class SearchRequest(BaseModel):
-    query: str
-    limit: int = 10
-
-# --- Dependencies ---
+# --- DEPENDENCY INJECTION ---
 def get_db():
+    """Generates a new database session for every request and ensures it is closed after."""
     db = SessionLocal()
-    try: yield db
-    finally: db.close()
+    try: 
+        yield db
+    finally: 
+        db.close()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+async def get_current_user(token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)):
+    """Auth Guard: Validates the JWT token and returns the current user object."""
+    return await auth.get_current_user(token, db)
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None: raise HTTPException(status_code=401)
-    except JWTError: 
-        logger.warning("❌ Invalid JWT Token used.")
-        raise HTTPException(status_code=401)
-    
-    user = db.query(User).filter(User.username == username).first()
-    if not user: 
-        logger.warning(f"❌ Token valid but user '{username}' not found in DB.")
-        raise HTTPException(status_code=401)
-    return user
+# --- SERVICE INITIALIZATION ---
+# Services are stateful objects that handle specific logic (Database, File Cleanup, RAG)
+conv_service = ConversationService(UPLOAD_DIR, VECTOR_DIR)
+msg_service = MessageService()
+rag_service = RAGService(os.getenv("PERPLEXITY_API_KEY"), VECTOR_DIR, UPLOAD_DIR)
+
+# --- CORS MIDDLEWARE ---
+# Security configuration to allow the frontend (even when opened via file://) to talk to the API.
+origins = [
+    "http://localhost",
+    "http://localhost:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8000",
+    "null",  # Essential for local testing without a web server
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- UTILITY FUNCTIONS ---
-async def calculate_file_hash(file_bytes: bytes) -> str:
-    """Calculate SHA256 hash of file content"""
-    return hashlib.sha256(file_bytes).hexdigest()
+# --- AUTHENTICATION ENDPOINTS ---
 
-# --- AUTH ---
-@app.post("/register", status_code=201)
-async def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
-    logger.info(f"👤 Registration attempt for: {user_in.username}")
-    if db.query(User).filter(User.username == user_in.username).first():
-        logger.warning(f"❌ Registration failed: Username '{user_in.username}' taken.")
-        raise HTTPException(status_code=400, detail="Username taken")
-    
-    hashed_password = get_password_hash(user_in.password)
-    db.add(User(username=user_in.username, hashed_password=hashed_password))
-    db.commit()
-    logger.info(f"✅ User registered successfully: {user_in.username}")
-    return {"message": "Created"}
+@app.post("/register", status_code=201, tags=["Auth"])
+async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    """Registers a new user account with hashed passwords."""
+    logger.info(f"Registering new user: {user.username}")
+    return AuthService.register_user(db, user.username, user.password)
 
-@app.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    logger.info(f"🔑 Login attempt for: {form_data.username}")
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        logger.warning(f"❌ Login failed for {form_data.username}: Incorrect credentials")
-        raise HTTPException(status_code=401, detail="Incorrect credentials")
-    
-    logger.info(f"✅ Login success: {form_data.username}")
-    return {"access_token": create_access_token(data={"sub": user.username}), "token_type": "bearer"}
+@app.post("/login", response_model=schemas.Token, tags=["Auth"])
+async def login(form_data: auth.OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """Authenticates user and returns a JSON Web Token (JWT)."""
+    logger.info(f"Login attempt: {form_data.username}")
+    res = AuthService.login_for_access_token(db, form_data.username, form_data.password)
+    logger.info(f"Login success: {form_data.username}")
+    return res
 
-@app.get("/users/me", response_model=UserInfo)
-async def read_users_me(current_user: User = Depends(get_current_user)):
+@app.get("/users/me", response_model=schemas.UserInfo, tags=["Auth"])
+async def me(current_user: models.User = Depends(get_current_user)):
+    """Returns profile info for whichever user is currently logged in."""
     return {"username": current_user.username}
 
-# --- PDF & CHAT ---
-@app.post("/upload_pdf")
-async def upload_pdf(
-    file: UploadFile = File(...),
-    conversation_id: Optional[int] = Form(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    logger.info(f"📤 Upload Request received | User: {current_user.username} | File: {file.filename}")
-    
-    # Read file content and calculate hash
-    file_content = await file.read()
-    file_hash = await calculate_file_hash(file_content)
-    logger.info(f"  📋 File hash: {file_hash}")
-    
-    vector_store_id = str(uuid.uuid4())
-    is_append = False
-    conversation = None
-    existing_pdfs = {}
+# --- CONVERSATION MANAGEMENT ---
 
-    if conversation_id:
-        conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-        if conversation:
-            vector_store_id = conversation.vector_store_id
-            existing_pdfs = conversation.get_file_hashes()
-            
-            # Check if the same file was already uploaded to this conversation
-            if file_hash in existing_pdfs.values():
-                logger.info(f"  ⚡ Duplicate file detected in this conversation! Skipping RAG processing.")
-                return {
-                    "status": "duplicate", 
-                    "conversation_id": conversation.id, 
-                    "title": conversation.title,
-                    "message": f"File '{file.filename}' already uploaded to this conversation.",
-                    "pdf_count": len(existing_pdfs)
-                }
-            
-            # New file in same conversation - append to existing vector store
-            is_append = True
-            logger.info(f"  ➡ Appending new PDF to Conversation ID: {conversation_id} | Existing PDFs: {len(existing_pdfs)}")
-    
-    safe_filename = f"{vector_store_id}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+@app.get("/users/stats/dashboard", tags=["Stats"])
+async def dashboard_stats(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Calculates all-time usage statistics for the user dashboard."""
+    return conv_service.get_dashboard_stats(db, current_user.id)
 
-    try:
-        # Write file to disk
-        async with aiofiles.open(file_path, 'wb') as f:
-            await f.write(file_content)
-        
-        logger.info(f"  ✅ File saved to disk. Starting RAG processing...")
-        await rag_logic.process_pdf_for_rag(file_path, vector_store_id, is_append=is_append)
+@app.get("/conversations", response_model=List[schemas.ConversationInfo], tags=["Chat"])
+async def list_conversations(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Retrieves all chat sessions for the logged-in user."""
+    return conv_service.get_user_conversations(db, current_user.id)
 
-        if not conversation:
-            # Create new conversation with first PDF
-            existing_pdfs[file.filename] = file_hash
-            conversation = Conversation(
-                title=file.filename, 
-                user_id=current_user.id, 
-                vector_store_id=vector_store_id
-            )
-            conversation.set_file_hashes(existing_pdfs)
-            db.add(conversation)
-            db.commit()
-            db.refresh(conversation)
-            logger.info(f"  ✅ New Conversation created (ID: {conversation.id}) with 1 PDF")
-        else:
-            # Add to existing conversation
-            existing_pdfs[file.filename] = file_hash
-            conversation.set_file_hashes(existing_pdfs)
-            # Update title to show multiple files if needed
-            if len(existing_pdfs) == 1:
-                conversation.title = file.filename
-            else:
-                conversation.title = f"Multiple PDFs ({len(existing_pdfs)} files)"
-            db.commit()
-            logger.info(f"  ✅ PDF added to Conversation | Total PDFs: {len(existing_pdfs)}")
-
-        return {
-            "status": "success", 
-            "conversation_id": conversation.id, 
-            "title": conversation.title,
-            "pdf_count": len(existing_pdfs),
-            "message": f"Successfully uploaded '{file.filename}'. Total PDFs in chat: {len(existing_pdfs)}"
-        }
-    except Exception as e:
-        logger.exception("❌ Upload failed unexpectedly")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/ask")
-async def ask_question_streaming(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    question = data.get("question")
-    conversation_id = data.get("conversation_id")
-    
-    logger.info(f"💬 Question received | User: {current_user.username} | ChatID: {conversation_id}")
-    logger.info(f"  Query: {question}")
-
-    if not question or not conversation_id: raise HTTPException(400)
-
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    if not conversation: raise HTTPException(404)
-
-    db.add(Message(role="user", content=question, conversation_id=conversation_id))
-    db.commit()
-
-    history = [{"role": m.role, "content": m.content} for m in db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()]
-
-    async def response_generator():
-        full_answer = ""
-        try:
-            logger.info("  ➡ Starting response stream...")
-            async for chunk in rag_logic.answer_question_stream(question, conversation.vector_store_id, history):
-                full_answer += chunk
-                yield chunk
-            
-            logger.info("  ✅ Stream finished. Saving bot message.")
-            if full_answer:
-                with SessionLocal() as db2:
-                    db2.add(Message(role="assistant", content=full_answer, conversation_id=conversation_id))
-                    db2.commit()
-        except Exception as e:
-            logger.error(f"❌ Streaming failed: {e}")
-            yield f"Error: {str(e)}"
-
-    return StreamingResponse(response_generator(), media_type="text/plain")
-
-@app.get("/preview/{vector_store_id}/{page_num}")
-async def get_page_preview(vector_store_id: str, page_num: int, current_user: User = Depends(get_current_user)):
-    logger.info(f"👀 Preview Request | Store: {vector_store_id} | Page: {page_num}")
-    target_file = None
-    for f in os.listdir(UPLOAD_DIR):
-        if f.startswith(vector_store_id):
-            target_file = os.path.join(UPLOAD_DIR, f)
-            break
-            
-    if not target_file: 
-        logger.error("❌ Source file for preview not found.")
-        raise HTTPException(404)
-
-    try:
-        doc = fitz.open(target_file)
-        if 0 <= page_num - 1 < len(doc):
-            return {"text": doc[page_num - 1].get_text()}
-        return {"text": "Page out of range."}
-    except Exception as e:
-        logger.error(f"❌ Preview failed: {e}")
-        raise HTTPException(500)
-
-# --- HISTORY ---
-@app.get("/conversations", response_model=List[ConversationInfo])
-async def get_convos(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Conversation).filter(Conversation.user_id == current_user.id).order_by(Conversation.created_at.desc()).all()
-
-@app.get("/conversations/{conversation_id}", response_model=ConversationHistory)
-async def get_history(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    msgs = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()
-    return ConversationHistory(title=c.title, vector_store_id=c.vector_store_id, messages=[{"id": m.id, "role": m.role, "content": m.content} for m in msgs])
-
-@app.get("/conversations/{conversation_id}/pdfs")
-async def get_conversation_pdfs(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get list of all PDFs uploaded to this conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404, detail="Conversation not found")
-    
-    file_hashes = c.get_file_hashes()
+@app.get("/conversations/{conversation_id}", response_model=schemas.ConversationHistory, tags=["Chat"])
+async def get_history(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Fetches the full message history and metadata for a specific chat session."""
+    conv, messages = conv_service.get_conversation_history(db, conversation_id, current_user.id)
+    if not conv: 
+        logger.warning(f"History request for non-existent chat: {conversation_id}")
+        raise HTTPException(404, detail="Conversation not found")
     return {
-        "conversation_id": conversation_id,
-        "title": c.title,
-        "pdf_count": len(file_hashes),
-        "pdfs": [{"filename": name, "hash": hash_val} for name, hash_val in file_hashes.items()]
-    }
-
-@app.post("/conversations/{conversation_id}/summarize-stream")
-async def summarize_streaming(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Stream the full conversation summary"""
-    logger.info(f"📝 Summary stream requested for ChatID: {conversation_id}")
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    msgs = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()
-    transcript = "\n".join([f"{m.role}: {m.content}" for m in msgs])
-    
-    async def summary_generator():
-        try:
-            async for chunk in rag_logic.generate_summary_stream(transcript):
-                yield chunk
-        except Exception as e:
-            logger.error(f"❌ Summary streaming failed: {e}")
-            yield f"Error: {str(e)}"
-    
-    return StreamingResponse(summary_generator(), media_type="text/plain")
-
-@app.get("/conversations/{conversation_id}/summarize", response_model=SummaryResponse)
-async def summarize(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    logger.info(f"📝 Summary requested for ChatID: {conversation_id}")
-    c = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    msgs = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()
-    transcript = "\n".join([f"{m.role}: {m.content}" for m in msgs])
-    summary = await rag_logic.generate_summary(transcript)
-    return SummaryResponse(generated_summary=summary, messages=[{"role": m.role, "content": m.content} for m in msgs])
-
-@app.put("/conversations/{conversation_id}")
-async def rename_convo(conversation_id: int, update: ConversationUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if c:
-        c.title = update.title
-        db.commit()
-        return c
-    raise HTTPException(404)
-
-@app.get("/conversations/{conversation_id}/export")
-async def export_conversation(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Export conversation as structured JSON for client-side export"""
-    logger.info(f"📤 Export requested for Conversation {conversation_id}")
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404, detail="Conversation not found")
-    
-    msgs = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.timestamp.asc()).all()
-    
-    return {
-        "title": c.title,
-        "created_at": c.created_at.isoformat(),
-        "user": current_user.username,
-        "messages": [
-            {
-                "role": m.role,
-                "content": m.content,
-                "timestamp": m.timestamp.isoformat()
-            } for m in msgs
-        ]
-    }
-
-# --- NEW FEATURE: CONVERSATION TAGS ---
-@app.post("/conversations/{conversation_id}/tags")
-async def add_tag(conversation_id: int, tag_req: TagCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Add a tag to conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    existing_tag = db.query(ConversationTag).filter(ConversationTag.conversation_id == conversation_id, ConversationTag.tag == tag_req.tag.lower()).first()
-    if existing_tag: raise HTTPException(400, detail="Tag already exists")
-    
-    tag = ConversationTag(conversation_id=conversation_id, tag=tag_req.tag.lower())
-    db.add(tag)
-    db.commit()
-    logger.info(f"✅ Tag '{tag_req.tag}' added to conversation {conversation_id}")
-    return {"status": "success", "tag": tag_req.tag}
-
-@app.get("/conversations/{conversation_id}/tags")
-async def get_tags(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get all tags for a conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    tags = db.query(ConversationTag).filter(ConversationTag.conversation_id == conversation_id).all()
-    return {"tags": [t.tag for t in tags]}
-
-@app.delete("/conversations/{conversation_id}/tags/{tag}")
-async def remove_tag(conversation_id: int, tag: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Remove a tag from conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    tag_obj = db.query(ConversationTag).filter(ConversationTag.conversation_id == conversation_id, ConversationTag.tag == tag.lower()).first()
-    if not tag_obj: raise HTTPException(404, detail="Tag not found")
-    
-    db.delete(tag_obj)
-    db.commit()
-    return {"status": "success"}
-
-@app.get("/conversations/by-tag/{tag}")
-async def get_conversations_by_tag(tag: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get all conversations with a specific tag"""
-    conversations = db.query(Conversation).join(ConversationTag).filter(
-        Conversation.user_id == current_user.id,
-        ConversationTag.tag == tag.lower()
-    ).all()
-    return [{"id": c.id, "title": c.title, "created_at": c.created_at.isoformat()} for c in conversations]
-
-# --- NEW FEATURE: SEARCH CONVERSATIONS ---
-@app.get("/conversations/search/{query}")
-async def search_conversations(query: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Search conversations by keywords in messages"""
-    query_lower = query.lower()
-    conversations = db.query(Conversation).filter(Conversation.user_id == current_user.id).all()
-    
-    results = []
-    for conv in conversations:
-        messages = db.query(Message).filter(Message.conversation_id == conv.id).all()
-        matching_messages = [m for m in messages if query_lower in m.content.lower()]
-        
-        if matching_messages or query_lower in conv.title.lower():
-            results.append({
-                "conversation_id": conv.id,
-                "title": conv.title,
-                "created_at": conv.created_at.isoformat(),
-                "matching_messages_count": len(matching_messages),
-                "preview": matching_messages[0].content[:100] if matching_messages else ""
-            })
-    
-    logger.info(f"🔍 Search for '{query}' returned {len(results)} results for user {current_user.username}")
-    return {"query": query, "results": results}
-
-# --- NEW FEATURE: MESSAGE REACTIONS/FEEDBACK ---
-@app.post("/messages/{message_id}/feedback")
-async def add_message_feedback(message_id: int, feedback: MessageFeedbackCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Add feedback (rating) to a message"""
-    msg = db.query(Message).filter(Message.id == message_id).first()
-    if not msg: raise HTTPException(404, detail="Message not found")
-    
-    # Check user owns the conversation
-    conv = db.query(Conversation).filter(Conversation.id == msg.conversation_id, Conversation.user_id == current_user.id).first()
-    if not conv: raise HTTPException(403, detail="Unauthorized")
-    
-    # Check if user already rated this message
-    existing = db.query(MessageFeedback).filter(
-        MessageFeedback.message_id == message_id,
-        MessageFeedback.user_id == current_user.id
-    ).first()
-    
-    if existing:
-        existing.rating = feedback.rating
-        db.commit()
-        return {"status": "updated"}
-    
-    fb = MessageFeedback(message_id=message_id, user_id=current_user.id, rating=feedback.rating)
-    db.add(fb)
-    db.commit()
-    logger.info(f"👍 Feedback added to message {message_id} by user {current_user.username}")
-    return {"status": "created"}
-
-@app.get("/messages/{message_id}/feedback")
-async def get_message_feedback(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get feedback stats for a message"""
-    feedbacks = db.query(MessageFeedback).filter(MessageFeedback.message_id == message_id).all()
-    
-    ratings = [f.rating for f in feedbacks]
-    avg_rating = sum(ratings) / len(ratings) if ratings else 0
-    thumbs_up = len([r for r in ratings if r == 1])
-    thumbs_down = len([r for r in ratings if r == -1])
-    
-    return {
-        "message_id": message_id,
-        "total_feedbacks": len(feedbacks),
-        "avg_rating": avg_rating,
-        "thumbs_up": thumbs_up,
-        "thumbs_down": thumbs_down
-    }
-
-# --- NEW FEATURE: CONVERSATION SHARING ---
-@app.post("/conversations/{conversation_id}/share")
-async def create_share_link(conversation_id: int, req: ShareCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a shareable link for a conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    share_token = secrets.token_urlsafe(32)
-    expires_at = None
-    if req.expires_in_days:
-        expires_at = datetime.utcnow() + timedelta(days=req.expires_in_days)
-    
-    share = PublicShare(conversation_id=conversation_id, share_token=share_token, expires_at=expires_at)
-    db.add(share)
-    db.commit()
-    
-    logger.info(f"🔗 Share link created for conversation {conversation_id}")
-    return {
-        "share_token": share_token,
-        "share_url": f"http://127.0.0.1:8000/share/{share_token}",
-        "expires_at": expires_at.isoformat() if expires_at else None
-    }
-
-@app.get("/share/{share_token}")
-async def get_shared_conversation(share_token: str, db: Session = Depends(get_db)):
-    """Get a publicly shared conversation (read-only)"""
-    share = db.query(PublicShare).filter(PublicShare.share_token == share_token, PublicShare.is_active == 1).first()
-    if not share: raise HTTPException(404, detail="Share not found or expired")
-    
-    if share.expires_at and datetime.utcnow() > share.expires_at:
-        raise HTTPException(403, detail="Share link expired")
-    
-    conv = db.query(Conversation).filter(Conversation.id == share.conversation_id).first()
-    if not conv: raise HTTPException(404)
-    
-    messages = db.query(Message).filter(Message.conversation_id == conv.id).order_by(Message.timestamp.asc()).all()
-    return {
+        "id": conv.id,
         "title": conv.title,
-        "created_at": conv.created_at.isoformat(),
-        "messages": [{"role": m.role, "content": m.content, "timestamp": m.timestamp.isoformat()} for m in messages]
+        "vector_store_id": conv.vector_store_id,
+        "messages": messages
     }
 
-@app.get("/conversations/{conversation_id}/shares")
-async def list_shares(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """List all share links for a conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
+@app.put("/conversations/{conversation_id}", tags=["Chat"])
+async def rename_convo(conversation_id: int, update: schemas.ConversationUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Allows manual renaming of a chat session."""
+    logger.info(f"Renaming chat {conversation_id} to: {update.title}")
+    c = conv_service.rename_conversation(db, conversation_id, current_user.id, update.title)
     if not c: raise HTTPException(404)
-    
-    shares = db.query(PublicShare).filter(PublicShare.conversation_id == conversation_id).all()
-    return {"shares": [{"share_token": s.share_token, "created_at": s.created_at.isoformat(), "expires_at": s.expires_at.isoformat() if s.expires_at else None, "is_active": bool(s.is_active)} for s in shares]}
+    return c
 
-@app.delete("/share/{share_token}")
-async def revoke_share(share_token: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Revoke a share link"""
-    share = db.query(PublicShare).filter(PublicShare.share_token == share_token).first()
-    if not share: raise HTTPException(404)
-    
-    # Verify ownership
-    conv = db.query(Conversation).filter(Conversation.id == share.conversation_id, Conversation.user_id == current_user.id).first()
-    if not conv: raise HTTPException(403)
-    
-    share.is_active = 0
-    db.commit()
-    logger.info(f"🔗 Share link revoked: {share_token}")
-    return {"status": "revoked"}
-
-# --- NEW FEATURE: BATCH OPERATIONS ---
-@app.post("/conversations/batch/delete")
-async def batch_delete_conversations(req: BatchDeleteRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete multiple conversations at once"""
-    convos = db.query(Conversation).filter(
-        Conversation.id.in_(req.conversation_ids),
-        Conversation.user_id == current_user.id
-    ).all()
-    
-    for c in convos:
-        db.delete(c)
-    
-    db.commit()
-    logger.info(f"🗑️ Batch deleted {len(convos)} conversations for user {current_user.username}")
-    return {"deleted_count": len(convos)}
-
-@app.post("/conversations/batch/tags")
-async def batch_add_tags(conversation_ids: List[int], tag: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Add a tag to multiple conversations"""
-    convos = db.query(Conversation).filter(
-        Conversation.id.in_(conversation_ids),
-        Conversation.user_id == current_user.id
-    ).all()
-    
-    added_count = 0
-    for c in convos:
-        existing = db.query(ConversationTag).filter(ConversationTag.conversation_id == c.id, ConversationTag.tag == tag.lower()).first()
-        if not existing:
-            db.add(ConversationTag(conversation_id=c.id, tag=tag.lower()))
-            added_count += 1
-    
-    db.commit()
-    logger.info(f"✅ Added tag '{tag}' to {added_count} conversations")
-    return {"updated_count": added_count}
-
-# --- NEW FEATURE: CONVERSATION STATISTICS ---
-@app.get("/conversations/{conversation_id}/stats")
-async def get_conversation_stats(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get statistics for a conversation"""
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if not c: raise HTTPException(404)
-    
-    messages = db.query(Message).filter(Message.conversation_id == conversation_id).all()
-    
-    user_messages = [m for m in messages if m.role == "user"]
-    bot_messages = [m for m in messages if m.role == "assistant"]
-    
-    avg_question_length = sum(len(m.content) for m in user_messages) / len(user_messages) if user_messages else 0
-    avg_response_length = sum(len(m.content) for m in bot_messages) / len(bot_messages) if bot_messages else 0
-    
-    session_duration = 0
-    if messages:
-        session_duration = (messages[-1].timestamp - messages[0].timestamp).total_seconds()
-    
-    # Get or create stats record
-    stats = db.query(ConversationStats).filter(ConversationStats.conversation_id == conversation_id).first()
-    if not stats:
-        stats = ConversationStats(
-            conversation_id=conversation_id,
-            total_questions=len(user_messages),
-            total_messages=len(messages),
-            avg_response_length=int(avg_response_length),
-            avg_question_length=int(avg_question_length),
-            session_duration=int(session_duration)
-        )
-        db.add(stats)
-        db.commit()
-    
-    return {
-        "conversation_id": conversation_id,
-        "total_messages": len(messages),
-        "total_questions": len(user_messages),
-        "total_responses": len(bot_messages),
-        "avg_question_length": int(avg_question_length),
-        "avg_response_length": int(avg_response_length),
-        "session_duration_seconds": int(session_duration),
-        "created_at": c.created_at.isoformat()
-    }
-
-@app.get("/users/stats/dashboard")
-async def get_user_stats_dashboard(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get overall user statistics"""
-    convos = db.query(Conversation).filter(Conversation.user_id == current_user.id).all()
-    all_messages = db.query(Message).join(Conversation).filter(Conversation.user_id == current_user.id).all()
-    
-    total_questions = len([m for m in all_messages if m.role == "user"])
-    total_conversations = len(convos)
-    avg_messages_per_conv = len(all_messages) / total_conversations if total_conversations > 0 else 0
-    
-    pdfs_uploaded = sum(len(c.get_file_hashes()) for c in convos)
-    
-    return {
-        "total_conversations": total_conversations,
-        "total_questions_asked": total_questions,
-        "total_pdfs_uploaded": pdfs_uploaded,
-        "avg_messages_per_conversation": round(avg_messages_per_conv, 2),
-        "total_api_calls": len(all_messages)
-    }
-
-@app.delete("/conversations/{conversation_id}", status_code=204)
-async def delete_convo(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    logger.info(f"🗑️ Deleting Conversation {conversation_id} for user {current_user.username}")
-    c = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id).first()
-    if c:
-        db.delete(c)
-        db.commit()
+@app.delete("/conversations/{conversation_id}", status_code=204, tags=["Chat"])
+async def delete_conversation(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Deletes the chat record from DB AND cleans up physical vector/pdf files from the server."""
+    if conv_service.delete_conversation(db, conversation_id, current_user.id):
         return Response(status_code=204)
     raise HTTPException(404)
+
+# --- DOCUMENT PROCESSING & RAG ---
+
+@app.post("/upload_pdf", tags=["Ingestion"])
+async def upload_pdf(file: UploadFile = File(...), conversation_id: Optional[int] = Form(None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    Main ingestion route:
+    1. Checks for duplicates using file hashing.
+    2. Stores the file physically.
+    3. Triggers RAG Service to create Vector/BM25 indices.
+    4. Auto-generates a smart title for the chat.
+    """
+    logger.info(f"Processing upload: {file.filename}")
+    content = await file.read()
+    f_hash = hashlib.sha256(content).hexdigest()
+    
+    vs_id = str(uuid.uuid4())
+    is_append = False
+    conv = None
+    
+    # Check if we are adding this file to an existing chat room
+    if conversation_id:
+        conv = db.query(models.Conversation).filter(models.Conversation.id == conversation_id, models.Conversation.user_id == current_user.id).first()
+        if conv:
+            vs_id = conv.vector_store_id
+            hashes = conv.get_file_hashes()
+            if f_hash in hashes.values():
+                logger.info(f"Duplicate upload blocked for: {file.filename}")
+                return {"status": "duplicate", "message": "File already recognized in this chat", "conversation_id": conv.id}
+            is_append = True
+
+    # Save the file with a unique prefix to prevent collisions
+    path = os.path.join(UPLOAD_DIR, f"{vs_id}_{file.filename}")
+    logger.info(f"Physical Save: {path}")
+    async with aiofiles.open(path, "wb") as f: 
+        await f.write(content)
+    
+    # Hand off to RAG service for expensive AI operations (Embedding + Indexing)
+    logger.info(f"Handoff to RAG Engine (vs_id: {vs_id})")
+    res = await rag_service.process_file(path, vs_id, is_append)
+    if not res: 
+        logger.error(f"RAG Engine failed for {file.filename}")
+        raise HTTPException(500, detail="Document indexing failed")
+    
+    # Ask the AI to read the document and give it a name
+    title = await rag_service.generate_one_liner_summary(res["preview"])
+    logger.info(f"AI suggests title: {title}")
+    
+    if not conv:
+        # Create a new conversation record
+        labels = {file.filename: f_hash}
+        conv = models.Conversation(title=title, user_id=current_user.id, vector_store_id=vs_id)
+        conv.set_file_hashes(labels)
+        db.add(conv)
+    else:
+        # Update existing record with the new file hash
+        hashes = conv.get_file_hashes()
+        hashes[file.filename] = f_hash
+        conv.set_file_hashes(hashes)
+        if len(hashes) > 1: conv.title = f"Inter-Doc: {title}"
+    
+    db.commit()
+    db.refresh(conv)
+    return {"status": "success", "conversation_id": conv.id, "title": conv.title}
+
+@app.get("/preview/{vector_store_id}/{filename}/{page_num}", tags=["Ingestion"])
+async def preview_page(vector_store_id: str, filename: str, page_num: int, current_user: models.User = Depends(get_current_user)):
+    """Fetches the raw text of a specific page from a specific file for the 'Citation Preview' feature."""
+    text = await rag_service.get_page_preview(vector_store_id, filename, page_num)
+    if text is None: raise HTTPException(404, detail="Page content not found")
+    return {"text": text}
+
+# --- CHAT & RAG ENDPOINTS ---
+
+@app.post("/ask", tags=["Chat"])
+async def ask(data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    The Thinking Engine:
+    1. Look up the specific chat and history.
+    2. Perform Hybrid Search (Vector + Keyword) across the specific documents.
+    3. Stream the AI's reasoned answer word-by-word back to the user.
+    """
+    q, cid = data.get("question"), data.get("conversation_id")
+    if not q or not cid: raise HTTPException(400, detail="Missing question or chat ID")
+    
+    logger.info(f"Query Processed: '{q[:40]}...' (Conv: {cid})")
+    
+    conv = db.query(models.Conversation).filter(models.Conversation.id == cid, models.Conversation.user_id == current_user.id).first()
+    if not conv: raise HTTPException(404)
+    
+    # Save the user message to DB immediately
+    msg_service.add_message(db, cid, "user", q)
+    
+    # Get conversation history to provide context to the LLM
+    msgs = db.query(models.Message).filter(models.Message.conversation_id == cid).all()
+    history = [{"role": m.role, "content": m.content} for m in msgs]
+    
+    async def stream_output():
+        """Generator that streams response chunks and saves the final output to DB."""
+        full_text = ""
+        # The rag_service.answer_question_stream is the core heavy lifter
+        async for chunk in rag_service.answer_question_stream(q, conv.vector_store_id, history):
+            full_text += chunk
+            yield chunk
+            
+        if full_text:
+            # Save the complete AI response once streaming finishes
+            assistant_msg = msg_service.add_message(db, cid, "assistant", full_text)
+            # Send the database ID so the UI can enable feedback buttons for this message
+            yield f"\n\n[MSID:{assistant_msg.id}]"
+
+    return StreamingResponse(stream_output(), media_type="text/plain")
+
+@app.post("/conversations/{conversation_id}/summarize-stream", tags=["Analysis"])
+async def summarize(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Generates a high-level summary of the entire conversation transcript."""
+    msgs = db.query(models.Message).filter(models.Message.conversation_id == conversation_id).all()
+    transcript = "\n".join([f"{m.role}: {m.content}" for m in msgs])
+    return StreamingResponse(rag_service.generate_summary_stream(transcript), media_type="text/plain")
+
+# --- FEEDBACK & UTILS ---
+
+@app.post("/messages/{message_id}/feedback", tags=["Analysis"])
+async def feedback(message_id: int, req: schemas.MessageFeedbackCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Stores user ratings (thumbs up/down) for specific AI messages."""
+    msg_service.add_feedback(db, message_id, current_user.id, req.rating)
+    return {"status": "success"}
+
+@app.get("/conversations/{conversation_id}/stats", tags=["Stats"])
+async def convo_stats(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Fetches real-time performance and usage metrics for a specific chat."""
+    stats = conv_service.get_stats(db, conversation_id, current_user.id)
+    if not stats: raise HTTPException(404)
+    return stats
+
+@app.get("/messages/{message_id}/feedback", tags=["Analysis"])
+async def get_feedback(message_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Retrieves aggregated feedback data for a message."""
+    return msg_service.get_feedback_stats(db, message_id)
+
+@app.post("/conversations/{conversation_id}/share", tags=["Chat"])
+async def share(conversation_id: int, req: schemas.ShareCreateRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Creates a unique, time-limited token for sharing chat history publicly."""
+    c = db.query(models.Conversation).filter(models.Conversation.id == conversation_id, models.Conversation.user_id == current_user.id).first()
+    if not c: raise HTTPException(404)
+    token = secrets.token_urlsafe(32)
+    exp = datetime.utcnow() + timedelta(days=req.expires_in_days) if req.expires_in_days else None
+    s = models.PublicShare(conversation_id=conversation_id, share_token=token, expires_at=exp)
+    db.add(s)
+    db.commit()
+    return {"share_token": token, "share_url": f"http://localhost:8000/share/{token}"}
+
+@app.get("/share/{token}", tags=["Chat"])
+async def get_share(token: str, db: Session = Depends(get_db)):
+    """Endpoint for anonymous users to view shared conversations."""
+    s = db.query(models.PublicShare).filter(models.PublicShare.share_token == token, models.PublicShare.is_active == 1).first()
+    if not s or (s.expires_at and datetime.utcnow() > s.expires_at): 
+        raise HTTPException(404, detail="Share link expired or invalid")
+    c = s.conversation
+    msgs = db.query(models.Message).filter(models.Message.conversation_id == c.id).order_by(models.Message.timestamp.asc()).all()
+    return {"title": c.title, "messages": [{"role": m.role, "content": m.content} for m in msgs]}
+
+@app.get("/conversations/{conversation_id}/export", tags=["Chat"])
+async def export(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Exports the entire chat as a clean JSON structure for external backup."""
+    c = db.query(models.Conversation).filter(models.Conversation.id == conversation_id, models.Conversation.user_id == current_user.id).first()
+    if not c: raise HTTPException(404)
+    msgs = db.query(models.Message).filter(models.Message.conversation_id == c.id).order_by(models.Message.timestamp.asc()).all()
+    return {
+        "title": c.title, 
+        "user": current_user.username,
+        "created_at": c.created_at,
+        "messages": [{"role": m.role, "content": m.content, "timestamp": m.timestamp} for m in msgs]
+    }
+
+if __name__ == "__main__":
+    # Standard entry point for running the API locally
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

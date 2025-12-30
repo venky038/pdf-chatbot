@@ -5,56 +5,60 @@ from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateT
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+from database import Base
 
-# Get the project root directory (one level up)
-APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(APP_ROOT)
-DB_PATH = os.path.join(PROJECT_ROOT, "chat_app.db")
-DATABASE_URL = f"sqlite:///{DB_PATH}"
-
-Base = declarative_base()
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+"""
+QueryMate Database Schema (SQLAlchemy Models)
+This file defines the table structure for our application.
+"""
 
 class User(Base):
+    """Represents a registered portal user."""
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    
+    # One-to-many relationship with conversations
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
 
-# --- THIS IS THE UPDATED CLASS ---
 class Conversation(Base):
+    """
+    Represents a research session/chat room.
+    A single conversation can hold multiple documents (PDFs/Images).
+    """
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, default="New Chat")
     created_at = Column(DateTime, default=datetime.utcnow)
     user_id = Column(Integer, ForeignKey("users.id"))
     
-    # Vector store ID (shared for all PDFs in this conversation)
+    # Unique ID linking this chat to a physical folder in 'vector_stores'
     vector_store_id = Column(String, unique=True, nullable=False) 
     
-    # Store file hashes as JSON: {"filename": "hash", ...}
+    # JSON column for tracking which files are indexed here: {"policy_v1.pdf": "sha256_hash", ...}
     file_hashes = Column(String, default="{}", nullable=False)
     
     user = relationship("User", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+    tags = relationship("ConversationTag", back_populates="conversation", cascade="all, delete-orphan")
     
     def get_file_hashes(self):
-        """Parse file hashes JSON"""
+        """Helper to deserialize the JSON hash string into a Python dictionary."""
         try:
             return json.loads(self.file_hashes) if self.file_hashes else {}
         except:
             return {}
     
     def set_file_hashes(self, hashes_dict):
-        """Store file hashes as JSON"""
+        """Helper to serialize a Python dictionary into a JSON string for DB storage."""
         self.file_hashes = json.dumps(hashes_dict)
 
 class Message(Base):
+    """Represents a specific chat bubble within a conversation."""
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
-    role = Column(String, nullable=False) # "user" or "assistant"
+    role = Column(String, nullable=False) # Roles: 'user' or 'assistant'
     content = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     conversation_id = Column(Integer, ForeignKey("conversations.id"))
@@ -63,19 +67,19 @@ class Message(Base):
     feedbacks = relationship("MessageFeedback", back_populates="message", cascade="all, delete-orphan")
 
 class MessageFeedback(Base):
-    """Message reactions/ratings for feedback"""
+    """Stores user sentiment (Ratings/Thumbs) for assistant responses."""
     __tablename__ = "message_feedbacks"
     id = Column(Integer, primary_key=True, index=True)
     message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    rating = Column(Integer, nullable=False)  # 1-5 or thumbs: 1=up, -1=down
+    rating = Column(Integer, nullable=False)  # 1 = Thumbs Up, -1 = Thumbs Down
     created_at = Column(DateTime, default=datetime.utcnow)
     
     message = relationship("Message", back_populates="feedbacks")
     user = relationship("User")
 
 class ConversationTag(Base):
-    """Tags for organizing conversations"""
+    """Custom organizational labels attached to chat sessions."""
     __tablename__ = "conversation_tags"
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
@@ -84,23 +88,20 @@ class ConversationTag(Base):
     
     conversation = relationship("Conversation", back_populates="tags")
 
-# Add relationship to Conversation model
-Conversation.tags = relationship("ConversationTag", back_populates="conversation", cascade="all, delete-orphan")
-
 class PublicShare(Base):
-    """Shareable conversation links"""
+    """Tokens that allow non-users to view specific chat transcripts."""
     __tablename__ = "public_shares"
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
     share_token = Column(String, unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=True)  # None = never expires
-    is_active = Column(Integer, default=1)  # 1=active, 0=disabled
+    expires_at = Column(DateTime, nullable=True)  # Null means the link is permanent
+    is_active = Column(Integer, default=1)        # Toggle: 1=active, 0=disabled
     
     conversation = relationship("Conversation")
 
 class ConversationStats(Base):
-    """Analytics for conversations"""
+    """Pre-computed analytics used for the Statistics 📊 feature."""
     __tablename__ = "conversation_stats"
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, unique=True)
@@ -108,7 +109,7 @@ class ConversationStats(Base):
     total_messages = Column(Integer, default=0)
     avg_response_length = Column(Integer, default=0)
     avg_question_length = Column(Integer, default=0)
-    session_duration = Column(Integer, default=0)  # in seconds
+    session_duration = Column(Integer, default=0)  # Total activity time in seconds
     last_updated = Column(DateTime, default=datetime.utcnow)
     
     conversation = relationship("Conversation")

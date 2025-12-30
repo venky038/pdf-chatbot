@@ -1,3 +1,8 @@
+/**
+ * Authentication Management Script
+ * Handles user login and registration flows via the QueryMate API.
+ */
+
 const loginForm = document.getElementById("loginForm");
 const registerForm = document.getElementById("registerForm");
 const errorMessage = document.getElementById("error-message");
@@ -5,15 +10,18 @@ const registerMessage = document.getElementById("register-message");
 
 const API_BASE = "http://127.0.0.1:8000";
 
-// --- Handle Login ---
+/**
+ * --- HANDLE LOGIN ---
+ * Submits credentials to exchange for a JWT access token.
+ * Note: Uses FormData as required by FastAPI's OAuth2PasswordBearer.
+ */
 loginForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     errorMessage.textContent = "";
-    
+
     const username = document.getElementById("username").value;
     const password = document.getElementById("password").value;
 
-    // FastAPI's OAuth2 expects form-data, not JSON
     const formData = new FormData();
     formData.append("username", username);
     formData.append("password", password);
@@ -21,26 +29,31 @@ loginForm.addEventListener("submit", async (e) => {
     try {
         const res = await fetch(`${API_BASE}/login`, {
             method: "POST",
-            body: formData, // Send as form data
+            body: formData,
         });
 
         if (!res.ok) {
             const data = await res.json();
-            throw new Error(data.detail || "Login failed");
+            throw new Error(data.detail || "Authentication failed. Please check your credentials.");
         }
 
         const data = await res.json();
-        
-        // Save the token and redirect
+
+        // Persist session: Save the JWT token in local storage
         localStorage.setItem("accessToken", data.access_token);
-        window.location.href = "index.html"; // Redirect to the main chat app
+
+        // Navigate to the main application workspace
+        window.location.href = "index.html";
 
     } catch (error) {
         errorMessage.textContent = error.message;
     }
 });
 
-// --- Handle Registration ---
+/**
+ * --- HANDLE REGISTRATION ---
+ * Creates a new user identity in the database.
+ */
 registerForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     registerMessage.textContent = "";
@@ -58,15 +71,16 @@ registerForm.addEventListener("submit", async (e) => {
         const data = await res.json();
 
         if (!res.ok) {
-            throw new Error(data.detail || "Registration failed");
+            throw new Error(data.detail || "Could not create account.");
         }
 
-        registerMessage.textContent = data.message;
-        registerMessage.className = "success";
+        // Inform user and reset form for login
+        registerMessage.textContent = "Account created! You can now sign in.";
+        registerMessage.classList.add("success");
         registerForm.reset();
 
     } catch (error) {
         registerMessage.textContent = error.message;
-        registerMessage.className = "error";
+        registerMessage.classList.add("error");
     }
 });

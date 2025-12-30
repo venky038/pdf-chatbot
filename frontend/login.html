@@ -1,20 +1,22 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome - PDF Chat</title>
+    <title>Welcome - QueryMate</title>
     <link rel="stylesheet" href="login.style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
+
 <body>
     <div class="background-mesh"></div>
-    
+
     <div class="auth-card">
         <div class="brand-header">
             <div class="logo-icon">📄</div>
-            <h1>PDF Chat AI</h1>
-            <p>Your intelligent document assistant</p>
+            <h1>QueryMate</h1>
+            <p>Your intelligent document research companion</p>
         </div>
 
         <div id="loginSection" class="form-section active">
@@ -27,12 +29,12 @@
                     <label>Password</label>
                     <input type="password" id="password" placeholder="••••••••" required>
                 </div>
-                
+
                 <p id="error-message" class="status-msg error"></p>
-                
+
                 <button type="submit" class="auth-btn">Sign In</button>
             </form>
-            
+
             <div class="toggle-text">
                 Don't have an account? <span onclick="toggleForms('register')">Create one</span>
             </div>
@@ -62,6 +64,11 @@
 
     <script src="login.js"></script>
     <script>
+        // Dark Mode Sync
+        if (localStorage.getItem("darkMode") === "true") {
+            document.documentElement.classList.add("dark-mode");
+        }
+
         // Simple UI Toggle Logic
         function toggleForms(mode) {
             const loginSec = document.getElementById('loginSection');
@@ -70,8 +77,8 @@
             const regMsg = document.getElementById('register-message');
 
             // Clear messages when switching
-            if(errorMsg) errorMsg.textContent = "";
-            if(regMsg) regMsg.textContent = "";
+            if (errorMsg) errorMsg.textContent = "";
+            if (regMsg) regMsg.textContent = "";
 
             if (mode === 'register') {
                 loginSec.classList.remove('active');
@@ -83,4 +90,5 @@
         }
     </script>
 </body>
+
 </html>

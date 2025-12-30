@@ -16,6 +16,11 @@ vector_stores/
 # Secrets
 /.env
 
+# Local Logs, Backups, and DB
+backend/server.log
+test.db
+*.bak
+
 # IDE / OS files
 .vscode/
 .idea/

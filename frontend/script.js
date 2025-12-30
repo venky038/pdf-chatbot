@@ -1,436 +1,665 @@
+/**
+ * QueryMate AI - Frontend Logic
+ * This file manages the user interface, real-time AI streaming, document management,
+ * and collaborative features like sharing and exporting.
+ */
+
+// --- GLOBAL CONFIGURATION ---
 const API_BASE = "http://127.0.0.1:8000";
+
+// --- APPLICATION STATE ---
 let currentConversationId = null;
-let currentVectorStoreId = null; 
-let currentSummaryData = null; // Store summary for PDF download
-let currentConversationData = null; // Store conversation for export
+let currentVectorStoreId = null;
+let currentSummaryData = null;
+let currentConversationData = null;
+let currentSearchQuery = "";
+let selectedConversations = new Set(); // For batch operations
+
+// Persistence for User Preferences
+let darkMode = localStorage.getItem("darkMode") === "true";
 const token = localStorage.getItem("accessToken");
 
+// --- CORE DOM ELEMENTS ---
 const chatBox = document.getElementById("chatBox");
 const userInput = document.getElementById("userInput");
 const popover = document.getElementById("citationPopover");
 const popoverContent = document.getElementById("popoverContent");
 const popoverTitle = document.getElementById("popoverTitle");
 
-// Summary Elements
+// --- UI MODALS & BUTTONS ---
 const summaryBtn = document.getElementById("summaryBtn");
 const summaryModal = document.getElementById("summaryModal");
 const exportBtn = document.getElementById("exportBtn");
 const exportModal = document.getElementById("exportModal");
 const summaryContent = document.getElementById("summaryContent");
-const closeModalBtn = document.getElementById("closeModalBtn");
-const downloadSummaryBtn = document.getElementById("downloadSummaryBtn");
 
-// --- INIT ---
+/**
+ * === UTILITIES ===
+ */
+
+// Displays brief floating notifications
+function showToast(message, duration = 3000) {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.classList.add("show"), 10);
+    setTimeout(() => {
+        toast.classList.remove("show");
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// Returns a glowing loader component
+function showLoading(text = "Processing...") {
+    const loader = document.createElement("div");
+    loader.className = "loading-inline";
+    loader.innerHTML = `
+        <span class="spinner-mini"></span>
+        <span class="loading-text">${text}</span>
+    `;
+    return loader;
+}
+
+/**
+ * === AESTHETICS (Dark Mode) ===
+ */
+function toggleDarkMode() {
+    darkMode = !darkMode;
+    localStorage.setItem("darkMode", darkMode);
+    applyDarkMode();
+    showToast(darkMode ? "🌙 Night mode active" : "☀️ Day mode active");
+}
+
+function applyDarkMode() {
+    if (darkMode) {
+        document.documentElement.classList.add("dark-mode");
+    } else {
+        document.documentElement.classList.remove("dark-mode");
+    }
+}
+
+/**
+ * === KEYBOARD SHORTCUTS ===
+ */
+document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.key === "Enter" && !userInput.disabled) {
+        e.preventDefault();
+        handleSend();
+    }
+    if (e.ctrlKey && e.key === "k") {
+        e.preventDefault();
+        document.getElementById("searchInput")?.focus();
+    }
+    if (e.ctrlKey && e.key === "n") {
+        e.preventDefault();
+        handleNewChat();
+    }
+    if (e.key === "Escape") {
+        summaryModal.style.display = "none";
+        exportModal.style.display = "none";
+        popover.style.display = "none";
+    }
+});
+
+/**
+ * === INITIALIZATION ===
+ */
 document.addEventListener("DOMContentLoaded", () => {
-    if(!token) window.location.href = "login.html";
-    loadUserInfo();  // Load and display current user
+    // 1. Session & Theme Guard
+    if (!token && !window.location.pathname.includes("login.html")) {
+        window.location.href = "login.html";
+        return;
+    }
+    applyDarkMode();
+
+    // 2. Data Hydration
+    loadUserInfo();
     loadConversations();
-    
-    // Close popover on outside click
+
+    // 3. Global click delegates
     document.addEventListener("click", (e) => {
-        if (!popover.contains(e.target) && !e.target.classList.contains("citation-link")) {
+        if (e.target === summaryModal) summaryModal.style.display = "none";
+        if (e.target === exportModal) exportModal.style.display = "none";
+        const statsModal = document.getElementById("statsModal");
+        if (e.target === statsModal) statsModal.style.display = "none";
+        if (popover && !popover.contains(e.target) && !e.target.classList.contains("citation-link")) {
             popover.style.display = "none";
         }
-        if (e.target === summaryModal) {
-            summaryModal.style.display = "none";
-        }
+    });
+
+    // 4. Link UI events
+    const actions = {
+        "logoutBtn": () => { localStorage.removeItem("accessToken"); window.location.href = "login.html"; },
+        "newChatBtn": handleNewChat,
+        "sendBtn": handleSend,
+        "summaryBtn": handleSummaryClick,
+        "downloadSummaryBtn": handleDownloadSummary,
+        "exportPdfBtn": () => exportConversation("pdf"),
+        "exportHtmlBtn": () => exportConversation("html"),
+        "exportJsonBtn": () => exportConversation("json"),
+        "closePopover": () => popover.style.display = "none",
+        "closeModalBtn": () => summaryModal.style.display = "none",
+        "closeExportModalBtn": () => exportModal.style.display = "none"
+    };
+
+    Object.entries(actions).forEach(([id, fn]) => {
+        const el = document.getElementById(id);
+        if (el) el.onclick = fn;
     });
 });
 
-// --- LOAD USER INFO ---
+/**
+ * === USER & STATS ===
+ */
 async function loadUserInfo() {
     try {
-        const res = await fetch(`${API_BASE}/users/me`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
+        const res = await fetch(`${API_BASE}/users/me`, { headers: { "Authorization": `Bearer ${token}` } });
         if (res.ok) {
             const user = await res.json();
             document.getElementById("usernameDisplay").textContent = user.username;
         }
-    } catch (e) {
-        console.error("Failed to load user info:", e);
-    }
+    } catch (e) { console.error("User info error:", e); }
 }
 
-document.getElementById("closePopover").onclick = () => popover.style.display = "none";
-closeModalBtn.onclick = () => summaryModal.style.display = "none";
-document.getElementById("closeExportModalBtn").onclick = () => exportModal.style.display = "none";
-
-// --- EXPORT LOGIC ---
-exportBtn.onclick = () => {
-    exportModal.style.display = "flex";
-};
-
-document.getElementById("exportPdfBtn").onclick = () => exportConversation("pdf");
-document.getElementById("exportHtmlBtn").onclick = () => exportConversation("html");
-document.getElementById("exportJsonBtn").onclick = () => exportConversation("json");
-
-async function exportConversation(format) {
-    if (!currentConversationId) return;
-    
+async function loadUserStats() {
     try {
-        const res = await fetch(`${API_BASE}/conversations/${currentConversationId}/export`, {
+        const res = await fetch(`${API_BASE}/users/stats/dashboard`, { headers: { "Authorization": `Bearer ${token}` } });
+        if (res.ok) showStatsModal(await res.json());
+    } catch (e) { console.error("Dashboard stats error:", e); }
+}
+
+function showStatsModal(stats) {
+    document.getElementById("stat-convs").textContent = stats.total_conversations;
+    document.getElementById("stat-questions").textContent = stats.total_questions;
+    document.getElementById("stat-pdfs").textContent = stats.total_pdfs;
+    document.getElementById("stat-msgs").textContent = stats.total_messages;
+    document.getElementById("statsModal").style.display = "flex";
+}
+
+/**
+ * === SEARCH ENGINE ===
+ */
+async function searchConversations(query) {
+    if (!query.trim()) { loadConversations(); return; }
+    try {
+        const res = await fetch(`${API_BASE}/conversations/search/${encodeURIComponent(query)}`, {
             headers: { "Authorization": `Bearer ${token}` }
         });
-        
-        if (!res.ok) throw new Error("Export failed");
+        if (!res.ok) throw new Error("Search service unavailable");
         const data = await res.json();
-        currentConversationData = data;
-        
-        if (format === "pdf") {
-            exportToPdf(data);
-        } else if (format === "html") {
-            exportToHtml(data);
-        } else if (format === "json") {
-            exportToJson(data);
+        const list = document.getElementById("conversationList");
+        list.innerHTML = data.results.length ? "" : `<div class="empty-state">🔍 No matches found</div>`;
+        data.results.forEach(c => {
+            const div = document.createElement("div");
+            div.className = `chat-item ${currentConversationId === c.conversation_id ? 'active' : ''}`;
+            div.innerHTML = `
+                <div class="chat-item-title">${c.title}</div>
+                <div class="chat-item-preview">${c.preview?.substring(0, 50) + '...' || ''}</div>
+            `;
+            div.onclick = () => loadChat(c.conversation_id);
+            list.appendChild(div);
+        });
+        showToast(`Found ${data.results.length} matches`);
+    } catch (e) { showToast("Search error: " + e.message); }
+}
+
+/**
+ * === TAGGING SYSTEM ===
+ */
+async function addTag(conversationId, tagName) {
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${conversationId}/tags`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ tag: tagName })
+        });
+        if (res.ok) { showToast(`✅ Tag applied`); loadConversationTags(conversationId); }
+    } catch (e) { showToast("Tag error: " + e.message); }
+}
+
+async function removeTag(conversationId, tagName) {
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${conversationId}/tags/${tagName}`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (res.ok) { showToast(`Tag removed`); loadConversationTags(conversationId); }
+    } catch (e) { showToast("Tag error: " + e.message); }
+}
+
+async function loadConversationTags(conversationId) {
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${conversationId}/tags`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const container = document.getElementById("conversationTags");
+            if (container) {
+                container.innerHTML = data.tags.map(t => `
+                    <span class="tag">${t}<button class="tag-remove" onclick="removeTag(${conversationId}, '${t}')">×</button></span>
+                `).join("");
+            }
         }
-        
+    } catch (e) { console.error("Tags load error:", e); }
+}
+
+/**
+ * === FEEDBACK & REACTIONS ===
+ */
+async function addMessageFeedback(messageId, rating) {
+    try {
+        const res = await fetch(`${API_BASE}/messages/${messageId}/feedback`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ rating: rating })
+        });
+        if (res.ok) showToast("✅ Feedback saved");
+    } catch (e) { showToast("Feedback error"); }
+}
+
+/**
+ * === SHARING UTILITIES ===
+ */
+async function createShareLink(id = null) {
+    const targetId = id || currentConversationId;
+    if (!targetId) return;
+    const days = prompt("How many days should this link last? (0=never)", "7");
+    if (days === null) return;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${targetId}/share`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ expires_in_days: days ? parseInt(days) : null })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            navigator.clipboard.writeText(data.share_url);
+            showToast("✅ Link copied!");
+            alert(`Link generated: ${data.share_url}`);
+        }
+    } catch (e) { showToast("Share error"); }
+}
+
+/**
+ * === BATCH ACTIONS ===
+ */
+function toggleConversationSelection(id) {
+    if (selectedConversations.has(id)) selectedConversations.delete(id); else selectedConversations.add(id);
+    if (selectedConversations.size) showToast(`${selectedConversations.size} selected`);
+}
+
+async function batchDeleteSelected() {
+    if (!selectedConversations.size) { showToast("Select items first"); return; }
+    if (!confirm(`Relly purge ${selectedConversations.size} chats?`)) return;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/batch/delete`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ conversation_ids: Array.from(selectedConversations) })
+        });
+        if (res.ok) { showToast("Purged successfully"); selectedConversations.clear(); loadConversations(); }
+    } catch (e) { showToast("Purge failed"); }
+}
+
+async function batchAddTags() {
+    if (!selectedConversations.size) return;
+    const tag = prompt("Tag to apply to selection:");
+    if (!tag) return;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/batch/tags`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ conversation_ids: Array.from(selectedConversations), tag: tag })
+        });
+        if (res.ok) { showToast(`Tagged ${selectedConversations.size} items`); selectedConversations.clear(); loadConversations(); }
+    } catch (e) { showToast("Batch tag error"); }
+}
+
+/**
+ * === EXPORT ENGINE ===
+ */
+async function exportConversation(format) {
+    if (!currentConversationId) return;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${currentConversationId}/export`, { headers: { "Authorization": `Bearer ${token}` } });
+        if (!res.ok) throw new Error("Data retrieval failed");
+        const data = await res.json();
+        if (format === "pdf") exportToPdf(data);
+        else if (format === "html") exportToHtml(data);
+        else if (format === "json") exportToJson(data);
         exportModal.style.display = "none";
-    } catch (e) {
-        alert("Export failed: " + e.message);
-    }
+        showToast("✅ Export successful");
+    } catch (e) { showToast("Export error"); }
 }
 
 function exportToPdf(data) {
     const html = generateConversationHtml(data);
     const element = document.createElement("div");
     element.innerHTML = html;
-    
-    const opt = {
-        margin: 10,
-        filename: `conversation_${data.title.replace(/\s+/g, "_")}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2 },
-        jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }
-    };
-    
+    const opt = { margin: 10, filename: `QueryMate_Export_${data.id}.pdf`, jsPDF: { unit: 'mm', format: 'a4' } };
     html2pdf().set(opt).from(element).save();
 }
 
 function exportToHtml(data) {
     const html = generateConversationHtml(data);
-    const fullHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${data.title} - Conversation Export</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; padding: 2rem; }
-        .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 2rem; }
-        .header { border-bottom: 2px solid #e2e8f0; padding-bottom: 1rem; margin-bottom: 2rem; }
-        .header h1 { color: #0f172a; font-size: 1.8rem; }
-        .header p { color: #64748b; margin-top: 0.5rem; font-size: 0.95rem; }
-        .messages { display: flex; flex-direction: column; gap: 1rem; }
-        .message { display: flex; flex-direction: column; }
-        .message.user { align-items: flex-end; }
-        .message.bot { align-items: flex-start; }
-        .msg-content { padding: 12px 18px; border-radius: 12px; line-height: 1.6; max-width: 70%; word-wrap: break-word; }
-        .message.user .msg-content { background: #3b82f6; color: white; border-radius: 12px 12px 0 12px; }
-        .message.bot .msg-content { background: #e2e8f0; color: #1e293b; border-radius: 12px 12px 12px 0; }
-        .timestamp { font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; }
-        .citation-link { color: #3b82f6; font-weight: 600; cursor: pointer; }
-        h2, h3 { color: #0f172a; margin-top: 1rem; margin-bottom: 0.5rem; }
-        p { margin-bottom: 0.5rem; }
-        code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
-        pre { background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📄 ${data.title}</h1>
-            <p><strong>User:</strong> ${data.user}</p>
-            <p><strong>Date:</strong> ${new Date(data.created_at).toLocaleString()}</p>
-        </div>
-        <div class="messages">
-            ${data.messages.map(m => `
-                <div class="message ${m.role}">
-                    <div class="msg-content">${m.content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
-                    <div class="timestamp">${new Date(m.timestamp).toLocaleTimeString()}</div>
-                </div>
-            `).join("")}
-        </div>
-    </div>
-</body>
-</html>
-    `;
-    
-    const blob = new Blob([fullHtml], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([html], { type: "text/html" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `conversation_${data.title.replace(/\s+/g, "_")}.html`;
+    link.download = `QueryMate_Export_${data.id}.html`;
     link.click();
 }
 
 function exportToJson(data) {
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `conversation_${data.title.replace(/\s+/g, "_")}.json`;
+    link.download = `QueryMate_Data_${data.id}.json`;
     link.click();
 }
 
 function generateConversationHtml(data) {
-    return `
-        <h1>${data.title}</h1>
-        <p><strong>User:</strong> ${data.user}</p>
-        <p><strong>Date:</strong> ${new Date(data.created_at).toLocaleString()}</p>
-        <hr/>
-        ${data.messages.map(m => `
-            <div style="margin: 1.5rem 0; padding: 1rem; background: ${m.role === "user" ? "#eff6ff" : "#f1f5f9"}; border-radius: 8px;">
-                <strong>${m.role === "user" ? "👤 You" : "🤖 Assistant"}:</strong>
-                <p style="margin-top: 0.5rem;">${m.content}</p>
-                <small style="color: #64748b;">${new Date(m.timestamp).toLocaleTimeString()}</small>
-            </div>
-        `).join("")}
-    `;
+    return `<h1>${data.title}</h1><p>Owner: ${data.user}</p><hr/>` +
+        data.messages.map(m => `<div><p><b>${m.role.toUpperCase()}:</b></p><div>${m.content}</div></div>`).join("");
 }
 
-// --- CHAT LOGIC ---
+/**
+ * === CHAT LOGIC (Real-time Streaming) ===
+ */
 async function handleSend() {
     const text = userInput.value.trim();
-    if(!text || !currentConversationId) return;
-    
+    if (!text || !currentConversationId) return;
+
     appendMessage('user', text);
     userInput.value = "";
-    
-    // 1. ADD "THINKING" INDICATOR
     const botContentDiv = appendMessage('bot', "");
-    botContentDiv.innerHTML = `
-        <div class="typing-indicator">
-            <span></span><span></span><span></span>
-        </div>`;
-    
+    botContentDiv.innerHTML = showLoading("AI is thinking...").innerHTML;
+
     try {
         const response = await fetch(`${API_BASE}/ask`, {
             method: "POST",
-            headers: { 
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}` 
-            },
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
             body: JSON.stringify({ question: text, conversation_id: currentConversationId })
         });
-        
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullText = "";
-        
-        // 2. Clear indicator on first chunk
-        let isFirstChunk = true;
-        
+        let isFirst = true;
+
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
-            if (isFirstChunk) {
-                botContentDiv.innerHTML = ""; // Remove dots
-                isFirstChunk = false;
+            if (isFirst) { botContentDiv.innerHTML = ""; isFirst = false; }
+            const chunk = decoder.decode(value);
+            fullText += chunk;
+
+            let display = fullText;
+            const idMatch = fullText.match(/\[MSID:(\d+)\]/);
+            if (idMatch) {
+                const msgDiv = botContentDiv.closest(".message");
+                if (msgDiv) {
+                    msgDiv.dataset.messageId = idMatch[1];
+                    msgDiv.querySelectorAll('.msg-rating-btn').forEach(b => b.disabled = false);
+                }
+                display = fullText.replace(/\[MSID:\d+\]/, "").trim();
             }
-            
-            fullText += decoder.decode(value);
-            renderTextWithCitations(botContentDiv, fullText);
+            renderTextWithCitations(botContentDiv, display);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
-    } catch (e) {
-        botContentDiv.textContent = "Error: " + e.message;
-    }
+    } catch (e) { botContentDiv.textContent = "AI error: " + e.message; }
 }
 
-// --- SUMMARY LOGIC ---
-summaryBtn.onclick = async () => {
+/**
+ * === RESEARCH ANALYSIS & SUMMARIES ===
+ */
+async function handleSummaryClick() {
     summaryModal.style.display = "flex";
-    summaryContent.innerHTML = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    
+    summaryContent.innerHTML = showLoading("Drafting executive summary...").innerHTML;
     try {
         const response = await fetch(`${API_BASE}/conversations/${currentConversationId}/summarize-stream`, {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${token}` } 
+            method: "POST", headers: { "Authorization": `Bearer ${token}` }
         });
-        
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         currentSummaryData = "";
-        
-        let isFirstChunk = true;
-        
+        let isFirst = true;
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
-            if (isFirstChunk) {
-                summaryContent.innerHTML = ""; // Remove loading indicator
-                isFirstChunk = false;
-            }
-            
+            if (isFirst) { summaryContent.innerHTML = ""; isFirst = false; }
             currentSummaryData += decoder.decode(value);
             renderTextWithCitations(summaryContent, currentSummaryData);
         }
-    } catch (e) {
-        summaryContent.textContent = "Failed to generate summary: " + e.message;
-    }
-};
+    } catch (e) { summaryContent.textContent = "Summary failed"; }
+}
 
-downloadSummaryBtn.onclick = () => {
-    if(!currentSummaryData) return;
-    
-    // Properly render markdown in PDF using html2pdf
-    const html = `
-        <div style="font-family: 'Inter', Arial, sans-serif; padding: 20px; line-height: 1.6; color: #1e293b;">
-            <h1 style="color: #0f172a; font-size: 1.8em; margin-bottom: 1rem;">Document Summary</h1>
-            <div style="border-top: 2px solid #e2e8f0; padding-top: 1rem;">
-                ${marked.parse(currentSummaryData)}
-            </div>
-            <div style="border-top: 1px solid #e2e8f0; margin-top: 2rem; padding-top: 1rem; font-size: 0.9em; color: #64748b;">
-                <p>Generated on: ${new Date().toLocaleString()}</p>
-            </div>
-        </div>
-    `;
-    
-    const opt = {
-        margin: 10,
-        filename: 'summary_report.pdf',
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2 },
-        jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
-    };
-    
-    html2pdf().set(opt).from(html).save();
-};
+function handleDownloadSummary() {
+    if (!currentSummaryData) return;
+    const element = document.createElement("div");
+    element.innerHTML = `<h1>Research Analysis</h1><hr/>` + marked.parse(currentSummaryData);
+    html2pdf().from(element).save("QueryMate_Summary.pdf");
+}
 
-
-// --- RENDER CITATIONS ---
+/**
+ * === CITATION ENGINE ===
+ */
 function renderTextWithCitations(element, text) {
+    if (!text) return;
     let html = marked.parse(text);
-    
-    // 1. Handle full format: [Source: filename - Page X]
-    html = html.replace(/\[Source: (.*?) - Page (\d+)\]/g, (match, filename, page) => {
-        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 ${filename} (Pg ${page})</span>`;
-    });
-
-    // 2. Handle standard format: [Page X]
-    html = html.replace(/\[Page (\d+)\]/g, (match, page) => {
-        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 Page ${page}</span>`;
-    });
-
-    // 3. Handle lazy format: [4] -> Convert to Page 4 pill
-    // This fixes the issue where the AI just returns a number
-    html = html.replace(/\[(\d+)\]/g, (match, page) => {
-        return `<span class="citation-link" onclick="showCitationPreview(event, ${page})">📄 Page ${page}</span>`;
-    });
-    
+    html = html.replace(/\[Source: (.*?) - Page (\d+)\]/g, (m, f, p) =>
+        `<span class="citation-link" onclick="showCitationPreview(event, ${p}, '${f.replace(/'/g, "\\'")}')">📄 ${f} (Pg ${p})</span>`);
+    html = html.replace(/\[Page (\d+)\]/g, (m, p) =>
+        `<span class="citation-link" onclick="showCitationPreview(event, ${p})">📄 Page ${p}</span>`);
+    html = html.replace(/\[(\d+)\]/g, (m, p) =>
+        `<span class="citation-link" onclick="showCitationPreview(event, ${p})">📄 Page ${p}</span>`);
     element.innerHTML = html;
 }
-// --- POPOVER PREVIEW LOGIC ---
-async function showCitationPreview(event, page) {
+
+async function showCitationPreview(event, page, filename = null) {
     event.stopPropagation();
-    
+    if (!currentVectorStoreId) return;
     const rect = event.target.getBoundingClientRect();
-    popover.style.left = `${rect.left}px`;
-    popover.style.top = `${rect.bottom + 10}px`; 
     popover.style.display = "block";
-    
-    popoverTitle.textContent = `Source: Page ${page}`;
-    popoverContent.textContent = "Loading preview...";
-    
+    popover.style.left = `${Math.min(rect.left, window.innerWidth - 370)}px`;
+    popover.style.top = `${rect.bottom + 10}px`;
+    popoverTitle.textContent = filename ? `${filename} (Pg ${page})` : `Page ${page}`;
+    popoverContent.innerHTML = showLoading().innerHTML;
     try {
-        const res = await fetch(`${API_BASE}/preview/${currentVectorStoreId}/${page}`, {
+        const res = await fetch(`${API_BASE}/preview/${currentVectorStoreId}/${encodeURIComponent(filename || "document")}/${page}`, {
             headers: { "Authorization": `Bearer ${token}` }
         });
-        
-        if (!res.ok) throw new Error("Failed to load");
         const data = await res.json();
-        popoverContent.textContent = data.text; 
-        
-    } catch (e) {
-        popoverContent.textContent = "Error loading preview.";
-    }
+        popoverContent.innerHTML = `<div class="preview-text">${data.text}</div>`;
+    } catch (e) { popoverContent.innerHTML = "Preview unavailable"; }
 }
 
-// --- HELPERS ---
+/**
+ * === SIDEBAR MANAGEMENT ===
+ */
+async function loadChat(id) {
+    currentConversationId = id;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${id}`, { headers: { "Authorization": `Bearer ${token}` } });
+        const data = await res.json();
+        currentVectorStoreId = data.vector_store_id;
+        document.getElementById("chatTitle").textContent = data.title;
+        chatBox.innerHTML = "";
+        data.messages.forEach(m => {
+            const content = appendMessage(m.role, "");
+            const div = content.closest(".message");
+            if (div) {
+                div.dataset.messageId = m.id;
+                div.querySelectorAll('.msg-rating-btn').forEach(b => b.disabled = false);
+            }
+            renderTextWithCitations(content, m.content);
+        });
+        userInput.disabled = false;
+        document.getElementById("sendBtn").disabled = false;
+        userInput.placeholder = "Ask about these documents...";
+        ["summaryBtn", "exportBtn", "shareBtn", "chatStatsBtn", "deleteBtn"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = "block";
+        });
+        loadConversationTags(id);
+    } catch (e) { showToast("Load error"); }
+}
+
+async function loadConversations() {
+    try {
+        const res = await fetch(`${API_BASE}/conversations`, { headers: { "Authorization": `Bearer ${token}` } });
+        const chats = await res.json();
+        const list = document.getElementById("conversationList");
+        list.innerHTML = chats.length ? "" : `<div class="empty-state">No chats yet</div>`;
+        chats.forEach(c => {
+            const div = document.createElement("div");
+            div.className = `chat-item ${currentConversationId === c.id ? 'active' : ''}`;
+            div.innerHTML = `<div style="flex: 1;"><div class="chat-item-title">${c.title}</div><div class="chat-item-date">${new Date(c.created_at).toLocaleDateString()}</div></div>`;
+            div.addEventListener("contextmenu", (e) => { e.preventDefault(); showContextMenu(e, c.id); });
+            div.onclick = () => loadChat(c.id);
+            list.appendChild(div);
+        });
+    } catch (e) { console.error("History load error"); }
+}
+
+function showContextMenu(e, id) {
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.innerHTML = `<button onclick="showConversationStats(${id})">📊 Stats</button>
+                      <button onclick="addTagPrompt(${id})">🏷️ Tag</button>
+                      <button onclick="createShareLink(${id})">🔗 Share</button>
+                      <button onclick="deleteConversation(${id})">🗑️ Delete</button>`;
+    document.body.appendChild(menu);
+    const close = () => { menu.remove(); document.removeEventListener('click', close); };
+    setTimeout(() => document.addEventListener('click', close), 10);
+}
+
+/**
+ * === DELETION & UPLOAD ===
+ */
+async function deleteConversation(id) {
+    if (!confirm("Delete permanently?")) return;
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${id}`, { method: "DELETE", headers: { "Authorization": `Bearer ${token}` } });
+        if (res.ok) { showToast("Purged"); if (currentConversationId === id) handleNewChat(); loadConversations(); }
+    } catch (e) { showToast("Delete failed"); }
+}
+
+function handleNewChat() {
+    currentConversationId = null;
+    currentVectorStoreId = null;
+    chatBox.innerHTML = `<div class="message bot"><div class="msg-content"><b>Welcome!</b><br>Upload a file to start.</div></div>`;
+    document.getElementById("chatTitle").textContent = "Fresh Session";
+    userInput.disabled = true;
+    userInput.placeholder = "Upload required...";
+    ["summaryBtn", "exportBtn", "shareBtn", "chatStatsBtn", "deleteBtn"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+    });
+}
+
+function addTagPrompt(id) {
+    const t = prompt("Tag name:");
+    if (t) addTag(id, t);
+}
+
+// Global Help / Core rendering
 function appendMessage(role, text) {
+    const displayRole = (role === "assistant" || role === "bot") ? "bot" : "user";
     const div = document.createElement("div");
-    div.className = `message ${role}`;
+    div.className = `message ${displayRole}`;
     const content = document.createElement("div");
     content.className = "msg-content";
     content.textContent = text;
-    div.appendChild(content);
+
+    if (displayRole === "bot") {
+        const wrapper = document.createElement("div");
+        wrapper.className = "msg-wrapper";
+        const btns = document.createElement("div");
+        btns.className = "msg-buttons-container";
+        const copy = document.createElement("button");
+        copy.className = "msg-copy-btn";
+        copy.innerHTML = "📋 Copy";
+        copy.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(content.innerText); showToast("Copied"); };
+        const rates = document.createElement("div");
+        rates.className = "msg-ratings";
+        const up = document.createElement("button");
+        up.className = "msg-rating-btn thumbs-up";
+        up.innerHTML = "👍";
+        up.disabled = true;
+        up.onclick = (e) => { e.stopPropagation(); addMessageFeedback(div.dataset.messageId, 1); up.classList.add("active"); };
+        const down = document.createElement("button");
+        down.className = "msg-rating-btn thumbs-down";
+        down.innerHTML = "👎";
+        down.disabled = true;
+        down.onclick = (e) => { e.stopPropagation(); addMessageFeedback(div.dataset.messageId, -1); down.classList.add("active"); };
+        rates.append(up, down);
+        btns.append(copy, rates);
+        wrapper.append(content, btns);
+        div.appendChild(wrapper);
+    } else {
+        div.appendChild(content);
+    }
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
     return content;
 }
 
-async function loadChat(id) {
-    currentConversationId = id;
-    const res = await fetch(`${API_BASE}/conversations/${id}`, { headers: { "Authorization": `Bearer ${token}` } });
-    const data = await res.json();
-    currentVectorStoreId = data.vector_store_id;
-    document.getElementById("chatTitle").textContent = data.title;
-    
-    chatBox.innerHTML = "";
-    data.messages.forEach(m => {
-        const div = appendMessage(m.role, "");
-        renderTextWithCitations(div, m.content);
-    });
-    
-    userInput.disabled = false;
-    document.getElementById("sendBtn").disabled = false;
-    summaryBtn.style.display = "block"; // Show button when chat loads
-    exportBtn.style.display = "block"; // Show export button when chat loads
-}
-
-async function loadConversations() {
-    const res = await fetch(`${API_BASE}/conversations`, { headers: { "Authorization": `Bearer ${token}` } });
-    const chats = await res.json();
-    const list = document.getElementById("conversationList");
-    list.innerHTML = "";
-    chats.forEach(c => {
-        const div = document.createElement("div");
-        div.className = `chat-item ${currentConversationId === c.id ? 'active' : ''}`;
-        div.textContent = c.title;
-        div.onclick = () => loadChat(c.id);
-        list.appendChild(div);
-    });
-}
-
-// Upload
-document.getElementById("pdfInput").addEventListener("change", async (e) => {
+// File Upload Listener
+document.getElementById("pdfInput")?.addEventListener("change", async (e) => {
     const file = e.target.files[0];
-    if(!file) return;
-    if(!confirm("Upload this file?")) return;
-    
-    const formData = new FormData();
-    formData.append("file", file);
-    if (currentConversationId) formData.append("conversation_id", currentConversationId);
-    
+    if (!file) return;
+
+    // 1. Interactive UI: Show QueryMate is working inside the chat
+    const statusMsg = appendMessage('bot', `🔍 **Analysis in progress...** I'm reading **${file.name}** and indexing its content for our research.`);
+    const spinner = showLoading("Ingesting pages...");
+    statusMsg.appendChild(spinner);
+
+    // Also show a subtle overlay in case they are looking elsewhere
+    const overlay = document.getElementById("uploadOverlay");
+    if (overlay) overlay.style.display = "flex";
+
+    const form = new FormData();
+    form.append("file", file);
+    if (currentConversationId) form.append("conversation_id", currentConversationId);
+
     try {
         const res = await fetch(`${API_BASE}/upload_pdf`, {
-            method: "POST", headers: { "Authorization": `Bearer ${token}` }, body: formData
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}` },
+            body: form
         });
-        const data = await res.json();
-        if(!currentConversationId) { loadConversations(); loadChat(data.conversation_id); }
-        else { alert("File added!"); }
-    } catch(e) { alert(e.message); }
-});
 
-document.getElementById("sendBtn").onclick = handleSend;
-userInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault(); 
-        if (!userInput.disabled) handleSend();
+        if (overlay) overlay.style.display = "none";
+
+        if (res.ok) {
+            const data = await res.json();
+            statusMsg.innerHTML = `✅ **Analysis Complete!** I have indexed **${file.name}**. What would you like to know about it?`;
+            showToast("Document Ready");
+            loadConversations();
+            loadChat(data.conversation_id);
+        } else {
+            statusMsg.innerHTML = `❌ **Upload Failed.** I couldn't process the file. Please ensure it's a valid PDF or Image.`;
+            showToast("Upload Error");
+        }
+    } catch (e) {
+        if (overlay) overlay.style.display = "none";
+        statusMsg.textContent = "Error: Service unreachable.";
+        showToast("Service Error");
     }
+    e.target.value = "";
 });
 
-document.getElementById("newChatBtn").onclick = () => {
-    currentConversationId = null;
-    chatBox.innerHTML = "";
-    document.getElementById("chatTitle").textContent = "New Conversation";
-    summaryBtn.style.display = "none";
-};
-document.getElementById("logoutBtn").onclick = () => {
-    localStorage.removeItem("accessToken");
-    window.location.href = "login.html";
-};
+// Final Keyboard Helper
+userInput?.addEventListener("keypress", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } });
+
+async function showConversationStats(id) {
+    try {
+        const res = await fetch(`${API_BASE}/conversations/${id}/stats`, { headers: { "Authorization": `Bearer ${token}` } });
+        const s = await res.json();
+        alert(`📊 Stats\nMessages: ${s.total_messages}\nQuestions: ${s.total_questions}\nResponses: ${s.total_responses}`);
+    } catch (e) { showToast("Stats error"); }
+}
