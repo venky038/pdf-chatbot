@@ -52,31 +52,55 @@ QueryMate is a **premium, feature-rich RAG (Retrieval-Augmented Generation)** ap
 
 ## 🔧 Installation & Setup
 
-1. **Clone the Repo**:
-   ```bash
-   git clone https://github.com/venky038/pdf-chatbot.git
-   cd pdf-chatbot
-   ```
+Follow these steps to get QueryMate running on your local machine:
 
-2. **Backend Infrastructure**:
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   ```
+### 1. Clone the Repository
+```bash
+git clone https://github.com/venky038/pdf-chatbot.git
+cd pdf-chatbot
+```
 
-3. **Configure Environment**:
-   Create a `.env` file in the `backend/` folder:
-   ```env
-   PERPLEXITY_API_KEY=your_key
-   JWT_SECRET_KEY=your_secret
-   ```
+### 2. Backend Environment Setup
+It is highly recommended to use a virtual environment:
+```bash
+cd backend
+python -m venv .venv
 
-4. **Launch Application**:
-   ```bash
-   # In backend/
-   uvicorn app:app --reload
-   ```
-   *Then open `frontend/login.html` in your browser.*
+# Activate the virtual environment:
+# On Windows:
+.venv\Scripts\activate
+# On macOS/Linux:
+source .venv/bin/activate
+
+# Install dependencies:
+pip install -r requirements.txt
+```
+
+### 3. Configure Environment Variables
+Create a file named `.env` in the `backend/` directory and add your API credentials:
+```env
+PERPLEXITY_API_KEY=your_perplexity_api_key_here
+JWT_SECRET_KEY=your_unique_random_secret_string
+```
+*Note: You can get your API key from the [Perplexity API Dashboard](https://www.perplexity.ai/settings/api).*
+
+### 4. Launch the Server
+Start the FastAPI backend server:
+```bash
+# Ensure you are in the /backend directory
+uvicorn app:app --reload
+```
+The backend will now be running at `http://127.0.0.1:8000`.
+
+### 5. Launch the Frontend
+You can open the application in two ways:
+1.  **Simple**: Open `frontend/login.html` directly in your browser.
+2.  **Recommended**: Use a local development server (like VS Code's **Live Server** extension) or run:
+    ```bash
+    cd ../frontend
+    python -m http.server 5500
+    ```
+    Then visit `http://127.0.0.1:5500/login.html`.
 
 ---
 

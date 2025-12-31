@@ -17,3 +17,5 @@ sqlalchemy[pydantic-plugin] # <-- NEW for database
 passlib
 argon2-cffi           # <-- NEW for passwords
 python-jose[cryptography]
+alembic
+markitdown
