@@ -1,0 +1,10 @@
+[TASK]
+Analyze the provided image and provide a high-fidelity transcription and analysis.
+
+[INSTRUCTIONS]
+1. TEXT EXTRACTION: Transcribe all visible text, including headers, footnotes, and label data exactly as it appears.
+2. VISUAL ANALYSIS: Describe charts, graphs, or diagrams. Identify axis labels, trends, and data points if present.
+3. CONTEXT: If it is a document scan, identify the document type (e.g., Invoice, Report, Technical Diagram).
+
+[OUTPUT]
+Provide a structured markdown response with clear headers for "Transcribed Text" and "Visual Elements".

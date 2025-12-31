@@ -1,0 +1,18 @@
+[TASK]
+Generate a comprehensive Analytical Summary of the following research session.
+
+[STRUCTURE]
+1. Executive Summary: High-level overview of the session's purpose and outcome.
+2. Key Insights: Bulleted list of the most critical takeaways.
+3. Supporting Evidence: Detailed breakdown of findings with [Page X] citations.
+4. Data/Metrics: Specific numbers, percentages, or dates mentioned.
+
+[RULES]
+- CITATIONS: Every analytical claim must be cited with the page number from the history.
+- FORMAT: Use professional Markdown headers and clean tables if necessary.
+- NEUTRALITY: Maintain an objective, researcher-like tone.
+
+[CHAT HISTORY]
+{transcript}
+
+[REPORT]

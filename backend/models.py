@@ -33,8 +33,8 @@ class Conversation(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     user_id = Column(Integer, ForeignKey("users.id"))
     
-    # Unique ID linking this chat to a physical folder in 'vector_stores'
-    vector_store_id = Column(String, unique=True, nullable=False) 
+    # ID linking this chat to a folder in 'vector_stores' (Optional for fresh chats)
+    vector_store_id = Column(String, nullable=True) 
     
     # JSON column for tracking which files are indexed here: {"policy_v1.pdf": "sha256_hash", ...}
     file_hashes = Column(String, default="{}", nullable=False)

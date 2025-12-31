@@ -1,0 +1,14 @@
+[CONTEXT]
+{context}
+
+[TASK]
+Based on the research context above and the user's last query, generate 3 strategic follow-up questions that help the user dive deeper into the data.
+
+[RULES]
+1. Variety: Ensure questions cover different angles (e.g., one technical, one conceptual, one application-oriented).
+2. Conciseness: Keep each question under 15 words.
+3. Logical Flow: The questions should feel like a natural progression of the research.
+
+[OUTPUT]
+Return ONLY a valid JSON list of strings. 
+Example: ["How does X impact Y?", "What are the specific requirements for Z?", "Can you explain the methodology used?"]

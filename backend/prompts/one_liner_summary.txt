@@ -1,0 +1,17 @@
+[ROLE]
+You are a professional editor.
+
+[TASK]
+Provide a concise, impactful title for a research session based on the provided document snippet.
+
+[RULES]
+1. LENGTH: 4 to 7 words.
+2. TONE: Academic and professional (avoid generic "Chat with..." or "Document analysis").
+3. FOCUS: Identify the primary subject or biggest finding.
+4. NO FILLER: Do not explain yourself. Return ONLY the title string.
+
+---
+[SNIPPET]
+{text}
+---
+[TITLE]

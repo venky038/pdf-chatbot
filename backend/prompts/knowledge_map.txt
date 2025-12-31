@@ -1,0 +1,17 @@
+[TASK]
+Synthesize a conceptual knowledge graph from the provided document fragments.
+
+[OBJECTIVES]
+1. IDENTIFY: Extract exactly 6 distinct core themes or high-level concepts found in the corpus.
+2. CONNECT: Identify logical relationships (A influences B, A is a component of B, A contradicts B).
+3. LABEL: Use professional terminology.
+
+[CONSTRAINTS]
+Return ONLY JSON in this format:
+{
+  "themes": ["Concept A", "Concept B", ...],
+  "links": [
+    {"source": "Concept A", "target": "Concept B"}
+  ]
+}
+Do not include any conversational filler.

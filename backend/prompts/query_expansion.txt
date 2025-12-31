@@ -1,0 +1,14 @@
+[TASK]
+Expand the following user query into 3 distinct search variations to maximize document retrieval recall.
+
+[USER QUERY]
+{query}
+
+[STRATEGY]
+Variation 1: Technical/Granular (Uses specific terminology or industry jargon).
+Variation 2: Conceptual/Broader (Focuses on high-level themes or synonymous categories).
+Variation 3: Intent-Based (Focuses on the expected outcome or "how-to" aspect).
+
+[OUTPUT]
+Return ONLY a JSON list of 3 strings. 
+Example: ["variation 1", "variation 2", "variation 3"]

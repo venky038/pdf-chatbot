@@ -127,10 +127,34 @@ async def dashboard_stats(db: Session = Depends(get_db), current_user: models.Us
     """Calculates all-time usage statistics for the user dashboard."""
     return conv_service.get_dashboard_stats(db, current_user.id)
 
+@app.get("/users/library/concepts", tags=["Stats"])
+async def get_concepts(current_user: models.User = Depends(get_current_user)):
+    """Generates a conceptual relationship map for the user's document history."""
+    return await rag_service.get_library_themes(current_user.id)
+
 @app.get("/conversations", response_model=List[schemas.ConversationInfo], tags=["Chat"])
 async def list_conversations(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Retrieves all chat sessions for the logged-in user."""
     return conv_service.get_user_conversations(db, current_user.id)
+
+@app.get("/conversations/search/deep", tags=["Chat"])
+async def deep_search(q: str, current_user: models.User = Depends(get_current_user)):
+    """Searches within the actual content of all uploaded documents."""
+    results = await rag_service.deep_search(q, current_user.id)
+    return {"results": results}
+
+@app.post("/conversations", response_model=schemas.ConversationInfo, tags=["Chat"])
+async def create_convo(data: schemas.ConversationUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Creates a fresh chat session without an immediate document upload."""
+    new_convo = models.Conversation(
+        title=data.title,
+        user_id=current_user.id,
+        vector_store_id=None # No specific document index yet
+    )
+    db.add(new_convo)
+    db.commit()
+    db.refresh(new_convo)
+    return new_convo
 
 @app.get("/conversations/{conversation_id}", response_model=schemas.ConversationHistory, tags=["Chat"])
 async def get_history(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -153,6 +177,34 @@ async def rename_convo(conversation_id: int, update: schemas.ConversationUpdate,
     c = conv_service.rename_conversation(db, conversation_id, current_user.id, update.title)
     if not c: raise HTTPException(404)
     return c
+
+@app.get("/users/me/tags", tags=["Chat"])
+async def get_all_user_tags(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Retrieves all unique tags used across all chats for the current user."""
+    tags = conv_service.get_user_tags(db, current_user.id)
+    return {"tags": tags}
+
+@app.get("/conversations/{conversation_id}/tags", tags=["Chat"])
+async def get_tags(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Retrieves all tags belonging to a specific conversation."""
+    tags = conv_service.get_tags(db, conversation_id, current_user.id)
+    return {"tags": tags}
+
+@app.post("/conversations/{conversation_id}/tags", tags=["Chat"])
+async def add_tag(conversation_id: int, data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Manually adds a new tag to a conversation."""
+    tag_name = data.get("tag")
+    if not tag_name: raise HTTPException(400, detail="Missing tag name")
+    t = conv_service.add_tag(db, conversation_id, current_user.id, tag_name)
+    if not t: raise HTTPException(404)
+    return {"status": "success", "tag": t.tag}
+
+@app.delete("/conversations/{conversation_id}/tags/{tag_name}", tags=["Chat"])
+async def remove_tag(conversation_id: int, tag_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Removes a specific tag from a conversation."""
+    if conv_service.remove_tag(db, conversation_id, current_user.id, tag_name):
+        return {"status": "success"}
+    raise HTTPException(404)
 
 @app.delete("/conversations/{conversation_id}", status_code=204, tags=["Chat"])
 async def delete_conversation(conversation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -184,7 +236,12 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: Optional[int
     if conversation_id:
         conv = db.query(models.Conversation).filter(models.Conversation.id == conversation_id, models.Conversation.user_id == current_user.id).first()
         if conv:
-            vs_id = conv.vector_store_id
+            # If the convo was 'empty' (e.g. created as Global Research), assign it a real ID now
+            if not conv.vector_store_id:
+                conv.vector_store_id = vs_id
+            else:
+                vs_id = conv.vector_store_id
+            
             hashes = conv.get_file_hashes()
             if f_hash in hashes.values():
                 logger.info(f"Duplicate upload blocked for: {file.filename}")
@@ -204,9 +261,13 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: Optional[int
         logger.error(f"RAG Engine failed for {file.filename}")
         raise HTTPException(500, detail="Document indexing failed")
     
+    # Mirror to Global Store
+    await rag_service.save_to_global_store(res["chunks"], current_user.id)
+    
     # Ask the AI to read the document and give it a name
     title = await rag_service.generate_one_liner_summary(res["preview"])
-    logger.info(f"AI suggests title: {title}")
+    tags = await rag_service.generate_tags(res["preview"])
+    logger.info(f"AI suggests title: {title} and tags: {tags}")
     
     if not conv:
         # Create a new conversation record
@@ -214,12 +275,21 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: Optional[int
         conv = models.Conversation(title=title, user_id=current_user.id, vector_store_id=vs_id)
         conv.set_file_hashes(labels)
         db.add(conv)
+        db.flush()
+        
+        # Add Auto-Tags
+        for t in tags:
+            conv_service.add_tag(db, conv.id, current_user.id, t)
     else:
         # Update existing record with the new file hash
         hashes = conv.get_file_hashes()
         hashes[file.filename] = f_hash
         conv.set_file_hashes(hashes)
         if len(hashes) > 1: conv.title = f"Inter-Doc: {title}"
+        
+        # Also add new auto-tags for the appended file
+        for t in tags:
+            conv_service.add_tag(db, conv.id, current_user.id, t)
     
     db.commit()
     db.refresh(conv)
@@ -245,6 +315,14 @@ async def ask(data: dict, db: Session = Depends(get_db), current_user: models.Us
     q, cid = data.get("question"), data.get("conversation_id")
     if not q or not cid: raise HTTPException(400, detail="Missing question or chat ID")
     
+    # --- BLOCKING LOGIC ---
+    # Check if this user has ever uploaded a document. If not, they are restricted to upload first.
+    if not rag_service.has_documents(current_user.id):
+        logger.warning(f"🚫 Blocked Chat: User {current_user.id} has no uploaded documents.")
+        async def block_generator():
+            yield "⚠️ **Access Restricted:** To start chatting with QueryMate, please upload at least one PDF or Image document first. \n\nOur system is document-centric; once you upload your first file, I can analyze it for you. In the future, every new chat you start will automatically remember all your previously uploaded documents!"
+        return StreamingResponse(block_generator(), media_type="text/plain")
+
     logger.info(f"Query Processed: '{q[:40]}...' (Conv: {cid})")
     
     conv = db.query(models.Conversation).filter(models.Conversation.id == cid, models.Conversation.user_id == current_user.id).first()
@@ -259,16 +337,17 @@ async def ask(data: dict, db: Session = Depends(get_db), current_user: models.Us
     
     async def stream_output():
         """Generator that streams response chunks and saves the final output to DB."""
-        full_text = ""
-        # The rag_service.answer_question_stream is the core heavy lifter
-        async for chunk in rag_service.answer_question_stream(q, conv.vector_store_id, history):
-            full_text += chunk
+        full_response = ""
+        
+        async for chunk in rag_service.answer_question_stream(q, conv.vector_store_id, history, current_user.id):
+            full_response += chunk
             yield chunk
             
-        if full_text:
-            # Save the complete AI response once streaming finishes
-            assistant_msg = msg_service.add_message(db, cid, "assistant", full_text)
-            # Send the database ID so the UI can enable feedback buttons for this message
+        if full_response:
+            # We save the ENTIRE message including [FOLLOW_UPS] JSON.
+            # The RAG Service handles stripping this tag when reading history.
+            # The Frontend handles parsing/hiding this tag when rendering.
+            assistant_msg = msg_service.add_message(db, cid, "assistant", full_response.strip())
             yield f"\n\n[MSID:{assistant_msg.id}]"
 
     return StreamingResponse(stream_output(), media_type="text/plain")
