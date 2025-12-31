@@ -423,6 +423,9 @@ class RAGService:
         context_blocks = []
         for d in top:
             fname = os.path.basename(d.metadata.get("source", "Unknown PDF"))
+            # Strip 36-char UUID prefix if present
+            if len(fname) > 37 and fname[36] == "_":
+                fname = fname[37:]
             page = d.metadata.get("page", "?")
             context_blocks.append(f"[Source: {fname} - Page {page}] {d.page_content}")
             

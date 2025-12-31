@@ -838,7 +838,20 @@ function appendMessage(role, text) {
         const copy = document.createElement("button");
         copy.className = "msg-copy-btn";
         copy.innerHTML = "📋 Copy";
-        copy.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(content.innerText); showToast("Copied"); };
+        copy.onclick = (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(content.innerText);
+            showToast("Copied");
+
+            // Button Feedback Animation
+            const originalText = copy.innerHTML;
+            copy.innerHTML = "✅ Copied!";
+            copy.classList.add("copied-active");
+            setTimeout(() => {
+                copy.innerHTML = originalText;
+                copy.classList.remove("copied-active");
+            }, 2000);
+        };
         const rates = document.createElement("div");
         rates.className = "msg-ratings";
         const up = document.createElement("button");

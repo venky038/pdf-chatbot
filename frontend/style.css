@@ -680,6 +680,11 @@ h3,
     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
 }
 
+.msg-copy-btn.copied-active {
+    border-color: #10b981 !important;
+    color: #10b981;
+}
+
 /* Active Reaction State */
 .msg-rating-btn.active {
     background: var(--primary) !important;
