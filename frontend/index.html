@@ -31,8 +31,11 @@
                     <span>+</span> New Conversation
                 </button>
                 <div class="search-bar">
-                    <input type="text" id="searchInput" placeholder="Search conversations (Ctrl+K)"
-                        onkeyup="searchConversations(this.value)" />
+                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                        <button class="search-mode-btn active" id="modeTitles">Titles</button>
+                        <button class="search-mode-btn" id="modeContent">Deep Search</button>
+                    </div>
+                    <input type="text" id="searchInput" placeholder="Search (Ctrl+K)..." />
                 </div>
             </div>
 
@@ -40,8 +43,9 @@
 
             <div class="sidebar-footer">
                 <div class="sidebar-controls">
-                    <button class="sidebar-btn" title="Toggle Theme" onclick="toggleDarkMode()">🌓</button>
-                    <button class="sidebar-btn" title="Dashboard Stats" onclick="loadUserStats()">📊</button>
+                    <button class="sidebar-btn" id="themeToggle" title="Toggle Theme">🌓</button>
+                    <button class="sidebar-btn" id="sidebarStatsBtn" title="Dashboard Stats">📊</button>
+                    <button class="sidebar-btn" id="knowledgeMapBtn" title="Knowledge Map">🕸️</button>
                 </div>
                 <div class="user-profile">
                     <div style="display: flex; flex-direction: column; flex: 1;">
@@ -66,14 +70,14 @@
                     <button class="btn-action" id="shareBtn" style="display:none;" onclick="createShareLink()">🔗
                         Share</button>
                     <button class="btn-action" id="exportBtn" style="display:none;">💾 Export</button>
-                    <button class="btn-action" id="chatStatsBtn" style="display:none;"
-                        onclick="showConversationStats()">📊 Stats</button>
+                    <button class="btn-action" id="sessionStatsBtn" style="display:none;">📊 Stats</button>
                     <button class="btn-action" id="deleteBtn" style="display:none; color: #ef4444;"
                         onclick="deleteConversation(currentConversationId)">🗑️ Delete</button>
 
                     <label class="upload-label">
                         <span id="uploadLabelText">📎 Upload</span>
-                        <input type="file" id="pdfInput" accept=".pdf,.png,.jpg,.jpeg,.webp" />
+                        <input type="file" id="pdfInput"
+                            accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx,.pptx,.md,.html,.txt" />
                     </label>
                 </div>
             </div>
@@ -98,18 +102,6 @@
     </div>
 
     <!-- Floating Citation Popover -->
-    <div id="citationPopover" class="context-menu"
-        style="display: none; max-width: 400px; padding: 1.5rem; white-space: normal; overflow: visible;">
-        <div
-            style="display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-            <strong id="popoverTitle" style="color: var(--primary); font-family: 'Outfit';">Source Reference</strong>
-            <button onclick="document.getElementById('citationPopover').style.display='none'"
-                style="border:none; background:none; cursor:pointer; font-size: 1.2rem; color: var(--text-muted);">&times;</button>
-        </div>
-        <div id="popoverContent"
-            style="font-size: 0.95rem; line-height: 1.6; color: var(--text-main); max-height: 250px; overflow-y: auto;">
-        </div>
-    </div>
 
     <!-- Modals -->
     <div id="statsModal" class="modal-overlay">
@@ -151,6 +143,30 @@
         </div>
     </div>
 
+    <div id="knowledgeMapModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>🕸️ Library Knowledge Graph</h3>
+                <button class="close-modal"
+                    onclick="document.getElementById('knowledgeMapModal').style.display='none'">&times;</button>
+            </div>
+            <div class="modal-body" style="background: var(--bg-app);">
+                <p
+                    style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 25px; text-align: center; font-weight: 500;">
+                    AI has synthesized the following core concepts from your document history:
+                </p>
+                <div id="knowledgeMapContent"
+                    style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; min-height: 150px;">
+                    <!-- Themes will be rendered here -->
+                </div>
+                <div id="knowledgeLinks"
+                    style="margin-top: 30px; font-size: 0.85rem; border-top: 1px solid var(--border); padding-top: 15px;">
+                    <!-- Links will be rendered here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="summaryModal" class="modal-overlay">
         <div class="modal-card">
             <div class="modal-header">
@@ -175,6 +191,20 @@
                 <button class="btn-action" id="exportHtmlBtn" style="justify-content: center;">🌐 As HTML</button>
                 <button class="btn-action" id="exportJsonBtn" style="justify-content: center;">📋 As JSON</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Floating Citation Popover (Moved to Bottom for Stacking) -->
+    <div id="citationPopover" class="context-menu"
+        style="display: none; max-width: 400px; padding: 1.5rem; white-space: normal; overflow: visible;">
+        <div
+            style="display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <strong id="popoverTitle" style="color: var(--primary); font-family: 'Outfit';">Source Reference</strong>
+            <button onclick="document.getElementById('citationPopover').style.display='none'"
+                style="border:none; background:none; cursor:pointer; font-size: 1.2rem; color: var(--text-muted);">&times;</button>
+        </div>
+        <div id="popoverContent"
+            style="font-size: 0.95rem; line-height: 1.6; color: var(--text-main); max-height: 250px; overflow-y: auto;">
         </div>
     </div>
 

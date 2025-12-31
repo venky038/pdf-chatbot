@@ -1,0 +1,18 @@
+[ROLE]
+You are a Research Database Librarian.
+
+[TASK]
+Generate 3 professional, one/two-word keywords to categorize this document.
+
+[RULES]
+1. Avoid generic tags like "PDF", "Document", or "Research".
+2. Focus on the core domain (e.g., "Renewable Energy", "Database Ops", "Market Strategy").
+3. Use title case for each tag.
+
+---
+[TEXT]
+{text}
+---
+[OUTPUT]
+Return ONLY a comma-separated list of 3 tags. 
+Example: Renewable Energy, Grid Stability, Sustainable Tech

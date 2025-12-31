@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime
 from typing import List, Optional
 
@@ -31,6 +31,13 @@ class ConversationInfo(BaseModel):
     id: int
     title: str
     created_at: datetime
+    tags: List[str] = []
+
+    @validator("tags", pre=True)
+    def extract_tags(cls, v):
+        if isinstance(v, list) and len(v) > 0 and hasattr(v[0], 'tag'):
+            return [t.tag for t in v]
+        return v
 
     class Config:
         from_attributes = True # Allows Pydantic to read data directly from SQLAlchemy objects
@@ -49,7 +56,7 @@ class ConversationHistory(BaseModel):
     """Full detail view including every message in a specific chat."""
     id: int
     title: str
-    vector_store_id: str
+    vector_store_id: Optional[str] = None
     messages: List[MessageInfo]
 
 class SummaryResponse(BaseModel):

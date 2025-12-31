@@ -10,10 +10,13 @@ const API_BASE = "http://127.0.0.1:8000";
 // --- APPLICATION STATE ---
 let currentConversationId = null;
 let currentVectorStoreId = null;
+let activeFilterTag = null; // Track if we are filtering the sidebar by a specific tag
 let currentSummaryData = null;
 let currentConversationData = null;
 let currentSearchQuery = "";
+let searchMode = "titles"; // 'titles' or 'content'
 let selectedConversations = new Set(); // For batch operations
+let hasGlobalDocs = false; // Tracks if user has previous document history
 
 // Persistence for User Preferences
 let darkMode = localStorage.getItem("darkMode") === "true";
@@ -138,10 +141,26 @@ document.addEventListener("DOMContentLoaded", () => {
         "exportPdfBtn": () => exportConversation("pdf"),
         "exportHtmlBtn": () => exportConversation("html"),
         "exportJsonBtn": () => exportConversation("json"),
+        "exportBtn": () => { document.getElementById("exportModal").style.display = "flex"; },
         "closePopover": () => popover.style.display = "none",
         "closeModalBtn": () => summaryModal.style.display = "none",
-        "closeExportModalBtn": () => exportModal.style.display = "none"
+        "closeExportModalBtn": () => exportModal.style.display = "none",
+        "sidebarStatsBtn": () => loadUserStats(true),
+        "sessionStatsBtn": () => showConversationStats(currentConversationId),
+        "knowledgeMapBtn": () => loadKnowledgeMap(),
+        "themeToggle": () => toggleDarkMode(),
+        "modeTitles": () => setSearchMode('titles'),
+        "modeContent": () => setSearchMode('content')
     };
+
+    const searchInp = document.getElementById("searchInput");
+    if (searchInp) {
+        searchInp.onkeyup = (e) => {
+            currentSearchQuery = e.target.value;
+            if (searchMode === 'titles') searchConversations(currentSearchQuery);
+            else handleDeepSearch(currentSearchQuery);
+        };
+    }
 
     Object.entries(actions).forEach(([id, fn]) => {
         const el = document.getElementById(id);
@@ -149,9 +168,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
-/**
- * === USER & STATS ===
- */
 async function loadUserInfo() {
     try {
         const res = await fetch(`${API_BASE}/users/me`, { headers: { "Authorization": `Bearer ${token}` } });
@@ -160,13 +176,28 @@ async function loadUserInfo() {
             document.getElementById("usernameDisplay").textContent = user.username;
         }
     } catch (e) { console.error("User info error:", e); }
+    loadUserStats(); // Trigger global state check
 }
 
-async function loadUserStats() {
+async function loadUserStats(showModal = false) {
     try {
         const res = await fetch(`${API_BASE}/users/stats/dashboard`, { headers: { "Authorization": `Bearer ${token}` } });
-        if (res.ok) showStatsModal(await res.json());
+        if (res.ok) {
+            const stats = await res.json();
+            hasGlobalDocs = stats.total_pdfs > 0;
+            if (showModal) showStatsModal(stats);
+            // Handle logical workspace setup based on history
+            if (!currentConversationId) handleNewChat();
+            return stats;
+        }
     } catch (e) { console.error("Dashboard stats error:", e); }
+}
+
+function toggleDarkMode() {
+    document.body.classList.toggle("dark-mode");
+    const isDark = document.body.classList.contains("dark-mode");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+    showToast(isDark ? "Dark Mode Active 🌙" : "Light Mode Active ☀️");
 }
 
 function showStatsModal(stats) {
@@ -177,9 +208,98 @@ function showStatsModal(stats) {
     document.getElementById("statsModal").style.display = "flex";
 }
 
+async function loadKnowledgeMap() {
+    document.getElementById("knowledgeMapModal").style.display = "flex";
+    const content = document.getElementById("knowledgeMapContent");
+    const linksDiv = document.getElementById("knowledgeLinks");
+    content.innerHTML = `<div class="spinner-mini"></div>`;
+    linksDiv.innerHTML = "";
+
+    try {
+        const res = await fetch(`${API_BASE}/users/library/concepts`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await res.json();
+        content.innerHTML = "";
+
+        if (!data.themes || !data.themes.length) {
+            content.innerHTML = "Upload more documents to generate a knowledge map!";
+            return;
+        }
+
+        data.themes.forEach(t => {
+            const node = document.createElement("div");
+            node.className = "theme-node";
+            node.style.cursor = "pointer";
+            node.textContent = t;
+            node.onclick = () => {
+                document.getElementById("knowledgeMapModal").style.display = "none";
+                quickAddTag(t); // Add as tag to current chat
+                setSearchMode('content');
+                document.getElementById("searchInput").value = t;
+                handleDeepSearch(t);
+            };
+            content.appendChild(node);
+        });
+
+        if (data.links && data.links.length) {
+            linksDiv.innerHTML = "<strong>Key Connections Identified:</strong><br>";
+            data.links.forEach(l => {
+                linksDiv.innerHTML += `• ${l.source} ↔ ${l.target}<br>`;
+            });
+        }
+    } catch (e) {
+        content.innerHTML = "Error generating Map.";
+    }
+}
+
+function setSearchMode(mode) {
+    searchMode = mode;
+    document.getElementById("modeTitles").classList.toggle("active", mode === "titles");
+    document.getElementById("modeContent").classList.toggle("active", mode === "content");
+    document.getElementById("searchInput").placeholder = mode === "titles" ? "Search Titles..." : "Deep Content Search...";
+    if (currentSearchQuery) {
+        if (mode === 'titles') searchConversations(currentSearchQuery);
+        else handleDeepSearch(currentSearchQuery);
+    }
+}
+
 /**
  * === SEARCH ENGINE ===
  */
+async function handleDeepSearch(query) {
+    if (!query.trim() || query.length < 3) { if (!query.trim()) loadConversations(); return; }
+    try {
+        const res = await fetch(`${API_BASE}/conversations/search/deep?q=${encodeURIComponent(query)}`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const list = document.getElementById("conversationList");
+        list.innerHTML = data.results.length ? "" : `<div class="empty-state">🔍 No deep matches</div>`;
+
+        data.results.forEach(r => {
+            const div = document.createElement("div");
+            div.className = "chat-item result-card";
+            div.style.padding = "14px";
+            div.style.marginBottom = "10px";
+            div.style.borderLeft = "4px solid var(--primary)";
+            div.style.cursor = "pointer";
+
+            div.innerHTML = `
+                <div class="chat-item-title" style="color: var(--primary); font-family: 'Outfit'; font-size: 0.9rem;">📄 ${r.source}</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px;">Found on Page ${r.page}</div>
+                <div class="chat-item-preview" style="font-style: italic; font-size: 0.8rem; line-height: 1.4; opacity: 0.9;">
+                    "...${r.content.substring(0, 100)}..."
+                </div>
+            `;
+
+            // On click, open the citation preview for that specific page
+            div.onclick = () => showCitationPreview(r.raw_source || r.source, r.page);
+            list.appendChild(div);
+        });
+    } catch (e) { console.error("Deep search error:", e); }
+}
 async function searchConversations(query) {
     if (!query.trim()) { loadConversations(); return; }
     try {
@@ -237,12 +357,28 @@ async function loadConversationTags(conversationId) {
             const data = await res.json();
             const container = document.getElementById("conversationTags");
             if (container) {
-                container.innerHTML = data.tags.map(t => `
+                let tagsHtml = data.tags.map(t => `
                     <span class="tag">${t}<button class="tag-remove" onclick="removeTag(${conversationId}, '${t}')">×</button></span>
                 `).join("");
+
+                // Add a '+' button for manual tagging
+                tagsHtml += `<button class="tag-add-btn" onclick="addTagPrompt(${conversationId})" title="Add Tag">+</button>`;
+
+                container.innerHTML = tagsHtml;
             }
         }
     } catch (e) { console.error("Tags load error:", e); }
+}
+
+/**
+ * Helper to quickly apply a tag to the current session
+ */
+async function quickAddTag(tagName) {
+    if (!currentConversationId) {
+        showToast("Open a chat first to apply tags");
+        return;
+    }
+    await addTag(currentConversationId, tagName);
 }
 
 /**
@@ -369,7 +505,33 @@ function generateConversationHtml(data) {
  */
 async function handleSend() {
     const text = userInput.value.trim();
-    if (!text || !currentConversationId) return;
+    if (!text) return;
+
+    // 1. If we are in a fresh session (no convo ID yet), create one first
+    if (!currentConversationId) {
+        try {
+            const createRes = await fetch(`${API_BASE}/conversations`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ title: "Global Research Chat" })
+            });
+            if (!createRes.ok) throw new Error("Failed to initialize session");
+            const newConvo = await createRes.json();
+            currentConversationId = newConvo.id;
+            loadConversations(); // Update list in sidebar
+
+            // Clean welcome message
+            chatBox.innerHTML = "";
+            document.getElementById("chatTitle").textContent = "Global Research Chat";
+            ["summaryBtn", "exportBtn", "shareBtn", "chatStatsBtn", "deleteBtn"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = "block";
+            });
+        } catch (e) {
+            showToast("Initialization error: " + e.message);
+            return;
+        }
+    }
 
     appendMessage('user', text);
     userInput.value = "";
@@ -387,6 +549,7 @@ async function handleSend() {
         const decoder = new TextDecoder();
         let fullText = "";
         let isFirst = true;
+        let fuRendered = false;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -395,17 +558,35 @@ async function handleSend() {
             const chunk = decoder.decode(value);
             fullText += chunk;
 
+            // Display logic: show text but hide metadata tags
             let display = fullText;
-            const idMatch = fullText.match(/\[MSID:(\d+)\]/);
+
+            // Handle Follow-ups
+            const fuMatch = fullText.match(/\[FOLLOW_UPS\]([\s\S]*?)(\[MSID:\d+\]|$)/);
+            if (fuMatch && !fuRendered) {
+                const jsonStr = fuMatch[1].trim();
+                // Check if JSON looks complete (ends with ])
+                if (jsonStr.endsWith("]")) {
+                    renderFollowUps(jsonStr);
+                    fuRendered = true;
+                }
+            }
+
+            // Clean display text (strip tags)
+            display = display.replace(/\[FOLLOW_UPS\][\s\S]*?(\[MSID:\d+\]|$)/, "$1");
+
+            // Handle MSID (for feedback buttons)
+            const idMatch = display.match(/\[MSID:(\d+)\]/);
             if (idMatch) {
                 const msgDiv = botContentDiv.closest(".message");
                 if (msgDiv) {
                     msgDiv.dataset.messageId = idMatch[1];
                     msgDiv.querySelectorAll('.msg-rating-btn').forEach(b => b.disabled = false);
                 }
-                display = fullText.replace(/\[MSID:\d+\]/, "").trim();
+                display = display.replace(/\[MSID:\d+\]/, "");
             }
-            renderTextWithCitations(botContentDiv, display);
+
+            renderTextWithCitations(botContentDiv, display.trim());
             chatBox.scrollTop = chatBox.scrollHeight;
         }
     } catch (e) { botContentDiv.textContent = "AI error: " + e.message; }
@@ -486,19 +667,39 @@ async function loadChat(id) {
         currentVectorStoreId = data.vector_store_id;
         document.getElementById("chatTitle").textContent = data.title;
         chatBox.innerHTML = "";
-        data.messages.forEach(m => {
-            const content = appendMessage(m.role, "");
-            const div = content.closest(".message");
+        data.messages.forEach((m, index) => {
+            const isLast = index === data.messages.length - 1;
+            let contentText = m.content;
+
+            // Check for Follow-ups in the last message
+            if (isLast && m.role === 'assistant') {
+                const fuMatch = contentText.match(/\[FOLLOW_UPS\]([\s\S]*?)(\[MSID:\d+\]|$)/);
+                if (fuMatch) {
+                    const jsonStr = fuMatch[1].trim();
+                    if (jsonStr.endsWith("]")) {
+                        // Use a timeout to render at the bottom after DOM update
+                        setTimeout(() => renderFollowUps(jsonStr), 50);
+                    }
+                }
+            }
+
+            // Always strip the tag for display
+            contentText = contentText.replace(/\[FOLLOW_UPS\][\s\S]*?(\[MSID:\d+\]|$)/, "$1");
+            // IDs are not needed in display text (handled via dataset)
+            contentText = contentText.replace(/\[MSID:\d+\]/, "");
+
+            const contentEl = appendMessage(m.role, "");
+            const div = contentEl.closest(".message");
             if (div) {
                 div.dataset.messageId = m.id;
                 div.querySelectorAll('.msg-rating-btn').forEach(b => b.disabled = false);
             }
-            renderTextWithCitations(content, m.content);
+            renderTextWithCitations(contentEl, contentText.trim());
         });
         userInput.disabled = false;
         document.getElementById("sendBtn").disabled = false;
         userInput.placeholder = "Ask about these documents...";
-        ["summaryBtn", "exportBtn", "shareBtn", "chatStatsBtn", "deleteBtn"].forEach(id => {
+        ["summaryBtn", "exportBtn", "shareBtn", "sessionStatsBtn", "deleteBtn"].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = "block";
         });
@@ -509,18 +710,47 @@ async function loadChat(id) {
 async function loadConversations() {
     try {
         const res = await fetch(`${API_BASE}/conversations`, { headers: { "Authorization": `Bearer ${token}` } });
-        const chats = await res.json();
+        let chats = await res.json();
         const list = document.getElementById("conversationList");
+
         list.innerHTML = chats.length ? "" : `<div class="empty-state">No chats yet</div>`;
+
         chats.forEach(c => {
             const div = document.createElement("div");
             div.className = `chat-item ${currentConversationId === c.id ? 'active' : ''}`;
-            div.innerHTML = `<div style="flex: 1;"><div class="chat-item-title">${c.title}</div><div class="chat-item-date">${new Date(c.created_at).toLocaleDateString()}</div></div>`;
+
+            const tagHtml = (c.tags || []).map(t => `
+                <span class="sidebar-tag ${t === activeFilterTag ? 'active' : ''}" 
+                      onclick="event.stopPropagation(); handleSidebarTagClick('${t}')">${t}</span>
+            `).join("");
+
+            div.innerHTML = `
+                <div style="flex: 1;">
+                    <div class="chat-item-title">${c.title}</div>
+                    <div class="sidebar-tags-container">${tagHtml}</div>
+                    <div class="chat-item-date">${new Date(c.created_at).toLocaleDateString()}</div>
+                </div>
+            `;
             div.addEventListener("contextmenu", (e) => { e.preventDefault(); showContextMenu(e, c.id); });
             div.onclick = () => loadChat(c.id);
             list.appendChild(div);
         });
     } catch (e) { console.error("History load error"); }
+}
+
+/**
+ * Handles sidebar tag interaction:
+ * 1. Highlights the tag for quick visual cross-referencing.
+ * 2. Does NOT modify chat metadata (fixes propagation bug).
+ * 3. Keeps your full conversation list visible.
+ */
+async function handleSidebarTagClick(tagName) {
+    if (activeFilterTag === tagName) {
+        activeFilterTag = null;
+    } else {
+        activeFilterTag = tagName;
+    }
+    loadConversations();
 }
 
 function showContextMenu(e, id) {
@@ -551,11 +781,36 @@ async function deleteConversation(id) {
 function handleNewChat() {
     currentConversationId = null;
     currentVectorStoreId = null;
-    chatBox.innerHTML = `<div class="message bot"><div class="msg-content"><b>Welcome!</b><br>Upload a file to start.</div></div>`;
-    document.getElementById("chatTitle").textContent = "Fresh Session";
-    userInput.disabled = true;
-    userInput.placeholder = "Upload required...";
-    ["summaryBtn", "exportBtn", "shareBtn", "chatStatsBtn", "deleteBtn"].forEach(id => {
+
+    // UI Setup based on user's global knowledge state
+    if (hasGlobalDocs) {
+        chatBox.innerHTML = `
+            <div class="message bot">
+                <div class="msg-content">
+                    👋 **Global Research Mode Active**<br><br>
+                    You have previously uploaded documents. You can start typing below to query your **entire knowledge base** across all past research!<br><br>
+                    QueryMate will automatically cross-reference all your PDF and image history.
+                </div>
+            </div>`;
+        document.getElementById("chatTitle").textContent = "Global Research";
+        userInput.disabled = false;
+        userInput.placeholder = "Search across all your documents...";
+        document.getElementById("sendBtn").disabled = false;
+    } else {
+        chatBox.innerHTML = `
+            <div class="message bot">
+                <div class="msg-content">
+                    <b>Welcome to QueryMate!</b><br><br>
+                    To begin, please upload a PDF or image. Once you've added your first document, my reasoning engine will be unlocked for this and all future chats!
+                </div>
+            </div>`;
+        document.getElementById("chatTitle").textContent = "Fresh Session";
+        userInput.disabled = true;
+        userInput.placeholder = "Upload document to unlock chat...";
+        document.getElementById("sendBtn").disabled = true;
+    }
+
+    ["summaryBtn", "exportBtn", "shareBtn", "sessionStatsBtn", "deleteBtn"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
     });
@@ -606,6 +861,27 @@ function appendMessage(role, text) {
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
     return content;
+}
+
+function renderFollowUps(jsonStr) {
+    try {
+        const questions = JSON.parse(jsonStr);
+        const container = document.createElement("div");
+        container.className = "follow-ups-container";
+        container.innerHTML = `<div class="fu-label">💡 Suggested Follow-ups:</div>`;
+        questions.forEach(q => {
+            const chip = document.createElement("button");
+            chip.className = "fu-chip";
+            chip.textContent = q;
+            chip.onclick = () => {
+                userInput.value = q;
+                handleSend();
+            };
+            container.appendChild(chip);
+        });
+        chatBox.appendChild(container);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    } catch (e) { console.error("Follow-up error:", e); }
 }
 
 // File Upload Listener

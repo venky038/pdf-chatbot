@@ -26,6 +26,11 @@ class ConversationService:
         logger.info(f"Listing conversations for user: {user_id}")
         return db.query(Conversation).filter(Conversation.user_id == user_id).order_by(Conversation.created_at.desc()).all()
 
+    def get_user_tags(self, db: Session, user_id: int):
+        """Retrieves all unique tags used across all chats for a specific user."""
+        tags = db.query(ConversationTag.tag).join(Conversation).filter(Conversation.user_id == user_id).distinct().all()
+        return [t[0] for t in tags]
+
     def get_conversation_history(self, db: Session, conversation_id: int, user_id: int):
         """Fetches a specific conversation and all its associated messages."""
         logger.info(f"Opening chat: {conversation_id}")
@@ -124,8 +129,12 @@ class ConversationService:
         return [t.tag for t in c.tags] if c else []
 
     def remove_tag(self, db: Session, conversation_id: int, user_id: int, tag: str):
-        """Removes a specific tag."""
-        t = db.query(ConversationTag).filter(ConversationTag.conversation_id == conversation_id, ConversationTag.tag == tag.lower()).first()
+        """Removes a specific tag (case-insensitive check)."""
+        # Search for exact match or lowercase match
+        t = db.query(ConversationTag).filter(
+            ConversationTag.conversation_id == conversation_id,
+            (ConversationTag.tag == tag) | (ConversationTag.tag == tag.lower())
+        ).first()
         if t:
             db.delete(t)
             db.commit()
