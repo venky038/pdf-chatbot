@@ -1,79 +1,94 @@
-# QueryMate - Intelligent Document & Image Research Assistant
+# 📄 QueryMate - Universal Document, Office & Image AI Assistant
 
-QueryMate is a premium, feature-rich RAG (Retrieval-Augmented Generation) application that allows users to chat with their documents (PDFs and Images) using advanced AI. It features a stunning glassmorphic UI, real-time citation rendering, and multi-modal support.
+QueryMate is a **premium, feature-rich RAG (Retrieval-Augmented Generation)** application designed for high-precision document research. It transforms static files into interactive knowledge bases using state-of-the-art AI, a stunning glassmorphic UI, and robust analytical tools.
+
+---
 
 ## 🚀 Key Features
 
-- **Multi-modal RAG**: Chat with both PDFs and Images (.png, .jpg, .webp).
-- **Vision Integration**: Uses Perplexity's `sonar-pro` vision capabilities to understand diagrams, charts, and text in images.
-- **Local OCR Fallback**: Integrated `RapidOCR` for local text extraction when vision APIs are unavailable.
-- **Hybrid Retrieval**: Combines FAISS vector search with BM25 keyword matching for superior context retrieval.
-- **Automatic Summarization**: Automatically generates concise one-line conversation titles based on document content.
-- **Real-time Citations**: Displays clickable page-pills that show exactly where the information was found.
-- **Premium UI**: Modern glassmorphic design with intuitive light/dark mode support.
-- **Smart Conversations**: Message feedback (thumbs up/down), copy to clipboard, and session management.
+- **Universal Document Support**: Chat with **PDFs, Word (.docx), Excel (.xlsx), PowerPoint (.pptx)**, MarkDown, HTML, and TXT files.
+- **Vision Intelligence**: Understand diagrams, charts, and text in **Images (.png, .jpg, .webp)** using advanced vision models.
+- **Deep Search Engineering**: Implements **Hybrid Retrieval** (FAISS Vector + BM25 Keyword) with **Cross-Encoder Re-ranking** for extreme precision.
+- **Multi-Query Expansion**: Automatically generates search variations to maximize retrieval recall.
+- **Smart Follow-ups**: AI suggests the next 3 logical research questions based on the current context.
+
+### 🕸️ Knowledge & Visualization
+- **Knowledge Map**: Generates a conceptual graph of your entire document library, identifying core themes and connections.
+- **Global Research Mode**: Query your **entire database** of past uploads across all conversations simultaneously.
+- **Interactive Tagging System**: 
+  - **Tag Library**: Effortlessly categorize research sessions.
+  - **Visual Cross-Reference**: Click a tag in the sidebar to highlight it across all related conversations.
+  - **Quick Add**: Apply tags directly from the Knowledge Map or Header with a single click.
+
+### 📊 Analytics & Management
+- **Statistics Dashboard**: Track your usage with global and per-session metrics (message counts, token indicators, document stats).
+- **Proactive Summarization**: Generates academic-style session titles and comprehensive analytical reports.
+- **Export Capabilities**: Save your research in **Professional PDF, HTML, or JSON** formats.
+
+### 💎 Premium User Experience
+- **Glassmorphic UI**: High-fidelity design with dynamic light/dark modes and fluid transitions.
+- **Real-time Citations**: Clean, UUID-free citations (e.g., `[Source: manual.pdf - Page 12]`) were implemented recently for better readability.
+- **Interactive Feedback**: Copy-to-clipboard animations, thumbs up/down reactions, and real-time streaming responses.
+- **Lazy Loading**: Optimized backend that loads heavy AI models only when needed, ensuring lightning-fast startup.
+
+---
 
 ## 🛠️ Tech Stack
 
-### Backend
-- **Framework**: FastAPI (Python)
-- **Vector Store**: FAISS
-- **Retrieval**: BM25 (Rank-BM25)
-- **AI Models**: 
-  - Embeddings: `sentence-transformers/all-MiniLM-L6-v2`
-  - Vision/Chat: Perplexity AI (`sonar-pro`)
-  - OCR: `RapidOCR` (ONNX Runtime)
-- **Database**: SQLAlchemy (SQLite)
-- **File Handling**: PyMuPDF (Fitz), Aiofiles
+### Backend (Python/FastAPI)
+- **Vector Engine**: FAISS (Meta)
+- **Keyword Engine**: BM25
+- **Re-ranking**: Cross-Encoders (`sentence-transformers`)
+- **Document Processing**: PyMuPDF, MarkItDown (Microsoft), RapidOCR (Local OCR fallback)
+- **AI Integration**: Perplexity AI (`sonar-pro` vision-enabled)
+- **Security**: JWT Authentication + Argon2 Password Hashing
 
-### Frontend
-- **Logic**: Vanilla JavaScript (ES6+)
-- **Styling**: Modern CSS3 (Variables, Glassmorphism, Responsive Design)
-- **Rendering**: Marked.js (Markdown), html2pdf (Export)
+### Frontend (Modern Web)
+- **Structure**: Vanilla Javascript (ES6+)
+- **Styling**: Premium CSS3 (Custom Design System, Glassmorphism)
+- **Components**: Marked.js (Markdown), html2pdf (Professional Exports)
 
-## 📋 Prerequisites
-
-- Python 3.9+
-- [Perplexity API Key](https://docs.perplexity.ai/)
+---
 
 ## 🔧 Installation & Setup
 
-1. **Clone the repository**:
+1. **Clone the Repo**:
    ```bash
-   git clone https://github.com/yourusername/querymate.git
-   cd querymate
+   git clone https://github.com/venky038/pdf-chatbot.git
+   cd pdf-chatbot
    ```
 
-2. **Backend Setup**:
+2. **Backend Infrastructure**:
    ```bash
    cd backend
    pip install -r requirements.txt
    ```
 
-3. **Environment Variables**:
-   Create a `.env` file in the `backend` directory:
+3. **Configure Environment**:
+   Create a `.env` file in the `backend/` folder:
    ```env
-   PERPLEXITY_API_KEY=your_api_key_here
-   SECRET_KEY=your_jwt_secret_key
+   PERPLEXITY_API_KEY=your_key
+   JWT_SECRET_KEY=your_secret
    ```
 
-4. **Run the Application**:
+4. **Launch Application**:
    ```bash
-   # From the backend directory
+   # In backend/
    uvicorn app:app --reload
    ```
+   *Then open `frontend/login.html` in your browser.*
 
-5. **Access the Frontend**:
-   Open `frontend/index.html` in your browser (or use a Live Server).
+---
 
-## 📖 Usage
+## 📖 Usage Workflow
 
-1. **Sign Up / Login**: Create an account to save your conversations.
-2. **Upload**: Drag and drop or click the "Upload File" button to add a PDF or Image.
-3. **Chat**: Ask questions like "What are the key takeaways from this chart?" or "Summarize the section on Docker volumes."
-4. **Citations**: Click on the `Page 1` pills to see the source text used for the answer.
-5. **Manage**: Use the sidebar to search conversations or delete them.
+1. **Analyze**: Upload any document (PDF, Word, Excel, PPT) or technical diagram.
+2. **Explore**: Use the **Knowledge Map** to see how concepts connect.
+3. **Query**: Ask complex questions. Use **Deep Search** for needle-in-a-haystack data.
+4. **Organize**: Tag your chats and use the sidebar highlights to track research themes.
+5. **Export**: Generate a final summary report for your records.
+
+---
 
 ## 📄 License
-
-MIT License - feel free to use this project for your own learning or applications!
+MIT License - Developed as a high-performance research companion.
