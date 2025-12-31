@@ -50,7 +50,6 @@ app = FastAPI(
 # DATABASE MIGRATIONS NOTE: 
 # We now use Alembic for schema management. 
 # Run 'alembic upgrade head' to ensure your local database is up-to-date.
-# models.Base.metadata.create_all(bind=engine)  <-- Removed in favor of migrations
 
 # --- DIRECTORY CONFIGURATION ---
 # We unify storage in the project root to keep the backend folder clean.

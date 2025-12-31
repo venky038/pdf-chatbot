@@ -180,7 +180,7 @@ class RAGService:
         await self._save_chunks(chunks, vs_id, is_append)
         
         preview = " ".join([d.page_content for d in docs[:2]])
-        return {"chunks": chunks, "preview": preview[:2000]}
+        return {"chunks": chunks, "preview": preview[:4000]}
 
     async def _load_pdf_batch(self, path: str):
         """Extracts text from PDF in a batch-optimized manner with high-speed OCR fallback."""
