@@ -378,7 +378,7 @@ async def convo_stats(conversation_id: int, db: Session = Depends(get_db), curre
 @app.get("/messages/{message_id}/feedback", tags=["Analysis"])
 async def get_feedback(message_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Retrieves aggregated feedback data for a message."""
-    return msg_service.get_feedback_stats(db, message_id)
+    return msg_service.get_feedback_stats(db, message_id, current_user.id)
 
 @app.post("/conversations/{conversation_id}/share", tags=["Chat"])
 async def share(conversation_id: int, req: schemas.ShareCreateRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
