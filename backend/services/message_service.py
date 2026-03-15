@@ -58,11 +58,24 @@ class MessageService:
         return True
 
     @staticmethod
-    def get_feedback_stats(db: Session, message_id: int):
+    def get_feedback_stats(db: Session, message_id: int, user_id: int):
         """
         Aggregates feedback for a specific message. 
         Useful for analytical dashboards or showing reaction counts in UI.
         """
+        msg = db.query(Message).filter(Message.id == message_id).first()
+        if not msg:
+            logger.warning(f"Feedback stats request for non-existent message ID: {message_id}")
+            raise HTTPException(404, detail="Message not found")
+
+        conv = db.query(Conversation).filter(
+            Conversation.id == msg.conversation_id,
+            Conversation.user_id == user_id
+        ).first()
+        if not conv:
+            logger.error(f"Unauthorized feedback stats request: User {user_id} for message {message_id}")
+            raise HTTPException(403, detail="Forbidden")
+
         feedbacks = db.query(MessageFeedback).filter(MessageFeedback.message_id == message_id).all()
         ratings = [f.rating for f in feedbacks]
         
