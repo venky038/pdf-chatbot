@@ -114,5 +114,3 @@ You can open the application in two ways:
 
 ---
 
-## 📄 License
-MIT License - Developed as a high-performance research companion.
